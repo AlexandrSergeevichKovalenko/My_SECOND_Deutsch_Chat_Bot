@@ -1,0 +1,2166 @@
+# Этот бот может работать с DEEPSEEK
+import os
+import logging
+import openai
+from openai import OpenAI
+import psycopg2
+import datetime
+from datetime import datetime, time
+from telegram import Update
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler
+from apscheduler.schedulers.background import BackgroundScheduler
+from apscheduler.schedulers.asyncio import AsyncIOScheduler
+import asyncio
+from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMarkup
+from telegram.ext import CallbackQueryHandler
+import hashlib
+import re
+import requests
+import aiohttp
+from telegram.ext import CallbackContext
+from telegram.helpers import escape_markdown
+import aiohttp
+from googleapiclient.discovery import build
+#import anthropic
+#from anthropic import AsyncAnthropic
+from telegram.error import TelegramError
+from telegram.helpers import escape_markdown
+
+application = None
+
+
+# Buttons in Telegramm
+TOPICS = ["Business", "Medicine", "Hobbies", "Free Time", "Education",
+    "Work", "Travel", "Science", "Technology", "Everyday Life", "Random sentences"]
+
+
+# Получи ключ на https://console.cloud.google.com/apis/credentials
+YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
+
+# # Ваш API-ключ для CLAUDE 3.7
+# CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+# if CLAUDE_API_KEY:
+#     logging.info("✅ CLAUDE_API_KEY успешно загружен!")
+# else:   
+#     logging.error("❌ Ошибка: CLAUDE_API_KEY не задан. Проверь переменные окружения!")
+
+# Ваш API-ключ для mediastack
+API_KEY_NEWS = os.getenv("API_KEY_NEWS")
+
+# ✅ Проверяем, что категория и подкатегория соответствуют утверждённым значениям
+VALID_CATEGORIES = [
+    'Nouns', 'Cases', 'Verbs', 'Tenses', 'Adjectives', 'Adverbs', 
+    'Conjunctions', 'Prepositions', 'Moods', 'Word Order', 'Other mistake'
+]
+
+VALID_SUBCATEGORIES = {
+    'Nouns': ['Gendered Articles', 'Pluralization', 'Compound Nouns', 'Declension Errors'],
+    'Cases': ['Nominative', 'Accusative', 'Dative', 'Genitive', 'Akkusativ + Preposition', 'Dative + Preposition', 'Genitive + Preposition'],
+    'Verbs': ['Placement', 'Conjugation', 'Weak Verbs', 'Strong Verbs', 'Mixed Verbs', 'Separable Verbs', 'Reflexive Verbs', 'Auxiliary Verbs', 'Modal Verbs', 'Verb Placement in Subordinate Clause'],
+    'Tenses': ['Present', 'Past', 'Simple Past', 'Present Perfect', 'Past Perfect', 'Future', 'Future 1', 'Future 2', 'Plusquamperfekt Passive', 'Futur 1 Passive', 'Futur 2 Passive'],
+    'Adjectives': ['Endings', 'Weak Declension', 'Strong Declension', 'Mixed Declension', 'Placement', 'Comparative', 'Superlative', 'Incorrect Adjective Case Agreement'],
+    'Adverbs': ['Placement', 'Multiple Adverbs', 'Incorrect Adverb Usage'],
+    'Conjunctions': ['Coordinating', 'Subordinating', 'Incorrect Use of Conjunctions'],
+    'Prepositions': ['Accusative', 'Dative', 'Genitive', 'Two-way', 'Incorrect Preposition Usage'],
+    'Moods': ['Indicative', 'Declarative', 'Interrogative', 'Imperative', 'Subjunctive 1', 'Subjunctive 2'],
+    'Word Order': ['Standard', 'Inverted', 'Verb-Second Rule', 'Position of Negation', 'Incorrect Order in Subordinate Clause', 'Incorrect Order with Modal Verb'],
+    'Other mistake': ['Unclassified mistake']
+}
+
+
+# ✅ Нормализуем VALID_CATEGORIES и VALID_SUBCATEGORIES к нижнему регистру для того чтобы пройти нормально проверку в функции log_translation_mistake
+VALID_CATEGORIES_lower = [cat.lower() for cat in VALID_CATEGORIES]
+VALID_SUBCATEGORIES_lower = {k.lower(): [v.lower() for v in values] for k, values in VALID_SUBCATEGORIES.items()}
+
+# === Подключение к базе данных PostgreSQL ===
+DATABASE_URL = os.getenv("DATABASE_URL_RAILWAY")
+
+if DATABASE_URL:
+    logging.info("✅ DATABASE_URL успешно загружен!")
+else:   
+    logging.error("❌ Ошибка: DATABASE_URL не задан. Проверь переменные окружения!")
+
+def get_db_connection():
+    return psycopg2.connect(DATABASE_URL, sslmode='require')
+
+# Проверка подключения
+conn = get_db_connection()
+cursor = conn.cursor()
+cursor.execute("SELECT version();")
+db_version = cursor.fetchone()
+
+print(f"✅ База данных подключена! Версия: {db_version}")
+
+cursor.close()
+conn.close()
+
+
+# # === Настройки бота ===
+TELEGRAM_DeepSeek_BOT_TOKEN = os.getenv("TELEGRAM_DeepSeek_BOT_TOKEN")
+
+if TELEGRAM_DeepSeek_BOT_TOKEN:
+    logging.info("✅ TELEGRAM_DeepSeek_BOT_TOKEN успешно загружен!")
+else:
+    logging.error("❌ TELEGRAM_DeepSeek_BOT_TOKEN не загружен! Проверьте переменные окружения.")
+
+# ID группы
+TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -1002258968332
+
+if TEST_DEEPSEEK_BOT_GROUP_CHAT_ID:
+    logging.info("✅ GROUP_CHAT_ID успешно загружен!")
+else:
+    logging.error("❌ GROUP_CHAT_ID не загружен! Проверьте переменные окружения.")
+
+TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = int(TEST_DEEPSEEK_BOT_GROUP_CHAT_ID)
+
+# # === Настройка DeepSeek API ===
+# api_key_deepseek = os.getenv("DeepSeek_API_Key")
+
+# if api_key_deepseek:
+#     logging.info("✅ DeepSeek_API_Key успешно загружен!")
+# else:
+#     logging.error("❌ Ошибка: DeepSeek_API_Key не задан. Проверь переменные окружения!")
+
+# === Настройка Open AI API ===
+openai.api_key = os.getenv("OPENAI_API_KEY")
+if openai.api_key:
+    logging.info("✅ OPENAI_API_KEY успешно загружен!")
+else:
+    logging.error("❌ OPENAI_API_KEY не загружен! Проверьте переменные окружения.")
+
+print("🚀 Все переменные окружения Railway:")
+for key, value in os.environ.items():
+    print(f"{key}: {value[:10]}...")  # Выводим первые 10 символов для безопасности
+
+
+
+
+# Функция для получения новостей на немецком
+async def send_german_news(context: CallbackContext):
+    url = f"http://api.mediastack.com/v1/news?access_key={API_KEY_NEWS}&languages=de&technology&countries=de,au&limit=2" # Ограничим до 3 новостей
+    #url = f"http://api.mediastack.com/v1/news?access_key={API_KEY_NEWS}&languages=de&countries=at&limit=3" for Austria
+
+    response = requests.get(url)
+
+    if response.status_code == 200:
+        data = response.json()
+
+        if "data" in data and len(data["data"]) > 0:
+            print("📢 Nachrichten auf Deutsch:")
+            for i, article in enumerate(data["data"], start=1):  # Ограничим до 3 новостей in API request
+                title = article.get("title", "Без заголовка")
+                source = article.get("source", "Неизвестный источник")
+                url = article.get("url", "#")
+
+                message = f"📰 {i}. *{title}*\n\n📌 {source}\n\n[Читать полностью]({url})"
+                await context.bot.send_message(
+                    chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID,
+                    text=message,
+                    parse_mode="Markdown",
+                    disable_web_page_preview=False  # Чтобы загружались превью страниц
+                )
+        else:
+            await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="❌ Нет свежих новостей на сегодня!")
+    else:
+        await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text=f"❌ Ошибка: {response.status_code} - {response.text}")
+
+
+
+# Используем контекстный менеджер для того чтобы Автоматически разрывает соединение закрывая курсор и соединения
+def initialise_database():
+    with get_db_connection() as connection:
+        with connection.cursor() as curr:
+            # ✅ Таблица с оригинальными предложениями
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS sentences_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        sentence TEXT NOT NULL
+                        
+                );
+            """)
+
+            # ✅ Таблица для переводов пользователей
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS translations_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        session_id BIGINT,
+                        username TEXT,
+                        sentence_id INT NOT NULL,
+                        user_translation TEXT,
+                        score INT,
+                        feedback TEXT,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+
+            # ✅ Новая таблица для всех сообщений пользователей (чтобы учитывать ленивых)
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS messages_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        username TEXT NOT NULL,
+                        message TEXT NOT NULL,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)    
+
+            # ✅ Таблица daily_sentences
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS daily_sentences_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        date DATE NOT NULL DEFAULT CURRENT_DATE,
+                        sentence TEXT NOT NULL,
+                        unique_id INT NOT NULL,
+                        user_id BIGINT,
+                        session_id BIGINT
+                );
+            """)
+
+            # ✅ Таблица user_progress
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS user_progress_deepseek (
+                    session_id BIGINT PRIMARY KEY,
+                    user_id BIGINT,
+                    username TEXT,
+                    start_time TIMESTAMP,
+                    end_time TIMESTAMP,
+                    completed BOOLEAN DEFAULT FALSE,
+                    CONSTRAINT unique_user_session_deepseek UNIQUE (user_id, start_time)
+                );
+            """)
+
+            # ✅ Таблица для хранения ошибок перевода
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS translation_errors_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        category TEXT NOT NULL CHECK (category IN ('Грамматика', 'Лексика', 'Падежи', 'Орфография', 'Синтаксис')),  
+                        error_description TEXT NOT NULL,
+                        timestamp TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+                );
+            """)
+            # ✅ Таблица для хранения запасных предложений в случае отсутствия связи Или ошибки на стороне Open AI API
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS spare_sentences_deepseek (
+                    id SERIAL PRIMARY KEY,
+                    sentence TEXT NOT NULL
+                );
+                         
+            """)
+
+
+            # ✅ Таблица для хранения ошибок
+            curr.execute("""
+                    CREATE TABLE IF NOT EXISTS detailed_mistakes_deepseek (
+                        id SERIAL PRIMARY KEY,
+                        user_id BIGINT NOT NULL,
+                        sentence TEXT NOT NULL,
+                        added_data TIMESTAMP,
+                        main_category TEXT CHECK (main_category IN (
+                            -- 🔹 Nouns
+                            'Nouns', 'Cases', 'Verbs', 'Tenses', 'Adjectives', 'Adverbs', 
+                            'Conjunctions', 'Prepositions', 'Moods', 'Word Order', 'Other mistake'
+                        )),  
+                        sub_category TEXT CHECK (sub_category IN (
+                            -- 🔹 Nouns
+                            'Gendered Articles', 'Pluralization', 'Compound Nouns', 'Declension Errors',
+                            
+                            -- 🔹 Cases
+                            'Nominative', 'Accusative', 'Dative', 'Genitive',
+                            'Akkusativ + Preposition', 'Dative + Preposition', 'Genitive + Preposition',
+                            
+                            -- 🔹 Verbs
+                            'Placement', 'Conjugation', 'Weak Verbs', 'Strong Verbs', 'Mixed Verbs', 
+                            'Separable Verbs', 'Reflexive Verbs', 'Auxiliary Verbs', 'Modal Verbs',
+                            'Verb Placement in Subordinate Clause',
+                            
+                            -- 🔹 Tenses
+                            'Present', 'Past', 'Simple Past', 'Present Perfect', 
+                            'Past Perfect', 'Future', 'Future 1', 'Future 2',
+                            'Plusquamperfekt Passive', 'Futur 1 Passive', 'Futur 2 Passive',
+
+                            -- 🔹 Adjectives
+                            'Endings', 'Weak Declension', 'Strong Declension', 'Mixed Declension', 
+                            'Placement', 'Comparative', 'Superlative', 'Incorrect Adjective Case Agreement',
+
+                            -- 🔹 Adverbs
+                            'Placement', 'Multiple Adverbs', 'Incorrect Adverb Usage',
+
+                            -- 🔹 Conjunctions
+                            'Coordinating', 'Subordinating', 'Incorrect Use of Conjunctions',
+
+                            -- 🔹 Prepositions
+                            'Accusative', 'Dative', 'Genitive', 'Two-way',
+                            'Incorrect Preposition Usage',
+
+                            -- 🔹 Moods
+                            'Indicative', 'Declarative', 'Interrogative', 'Imperative',
+                            'Subjunctive 1', 'Subjunctive 2',
+
+                            -- 🔹 Word Order
+                            'Standard', 'Inverted', 'Verb-Second Rule', 'Position of Negation',
+                            'Incorrect Order in Subordinate Clause', 'Incorrect Order with Modal Verb',
+
+                            -- 🔹 Other
+                            'Unclassified mistake' -- Для ошибок, которые не попали в категории
+                        )),
+                        
+                        severity INT DEFAULT 1,  -- Уровень серьёзности ошибки (1 — низкий, 5 — высокий)
+                        mistake_count INT DEFAULT 1, -- Количество раз, когда ошибка была зафиксирована
+                        first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время первой фиксации ошибки
+                        last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время последнего появления ошибки
+                        error_count_week INT DEFAULT 0, -- Количество ошибок за последнюю неделю
+
+                        -- ✅ Уникальный ключ для предотвращения дубликатов
+                        CONSTRAINT for_mistakes_table UNIQUE (user_id, sentence, main_category, sub_category)
+                    );
+
+            """)
+                         
+    connection.commit()
+
+    print("✅ Таблицы sentences_deepseek, translations_deepseek, daily_sentences_deepseek, messages_deepseek, user_progress_deepseek, translation_errors_deepseek проверены и готовы к использованию.")
+
+initialise_database()
+
+async def log_all_messages(update: Update, context: CallbackContext):
+    """Логируем ВСЕ текстовые сообщения для отладки."""
+    logging.info(f"📩 Бот получил сообщение: {update.message.text}")
+
+
+#Имитация набора текста с typing-индикатором
+async def simulate_typing(context, chat_id, duration=3):
+    """Эмулирует набор текста в чате."""
+    await context.bot.send_chat_action(chat_id=chat_id, action="typing")
+    await asyncio.sleep(duration)  # Имитация задержки перед отправкой текста
+
+
+
+# Buttons in Telegram
+async def send_main_menu(update: Update, context: CallbackContext):
+    """Принудительно обновляет главное меню с кнопками."""
+    keyboard = [
+        ["📌 Выбрать тему"],  # ❗ Убедись, что текст здесь правильный
+        ["🚀 Начать перевод", "✅ Завершить перевод"],
+        ["📜 Проверить перевод", "🟡 Посмотреть свою статистику"]
+    ]
+
+    reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
+
+    # 1️⃣ Удаляем старую клавиатуру
+    #await update.message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True))
+
+    # 2️⃣ Отправляем новое меню
+    await update.message.reply_text("📌 Главное меню", reply_markup=reply_markup)
+
+async def debug_message_handler(update: Update, context: CallbackContext):
+    print(f"🔹 Получено сообщение (DEBUG): {update.message.text}")
+
+async def handle_button_click(update: Update, context: CallbackContext):
+    """Обрабатывает нажатия на кнопки главного меню."""
+    
+    print("🛠 handle_button_click() вызван!")  # Логируем сам вызов функции
+
+    if not update.message:
+        print("❌ Ошибка: update.message отсутствует!")
+        return
+    
+    text = update.message.text.strip()
+    print(f"📥 Получено сообщение: {text}")
+
+    if text == "📌 Выбрать тему":
+        await choose_topic(update, context)
+    elif text == "🚀 Начать перевод":
+        await letsgo(update, context)
+    elif text == "✅ Завершить перевод":
+        await done(update, context)
+    elif text == "🟡 Посмотреть свою статистику":
+        await user_stats(update, context)
+    elif text == "📜 Проверить перевод":
+        logging.info(f"📌 Пользователь {update.message.from_user.id} нажал кнопку '📜 Проверить перевод'. Запускаем проверку.")
+        await check_translation_from_text(update, context)  # ✅ Теперь сразу запускаем проверку переводов
+
+
+# 🔹 **Функция, которая запускает проверку переводов**
+async def check_translation_from_text(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+
+    # Проверяем, есть ли накопленные переводы
+    if "pending_translations" not in context.user_data or not context.user_data["pending_translations"]:
+        logging.info(f"❌ Пользователь {user_id} нажал '📜 Проверить перевод', но у него нет сохранённых переводов!")
+        await update.message.reply_text("❌ У вас нет непроверенных переводов! Сначала отправьте перевод, затем нажмите '📜 Проверить перевод'.")
+        return
+
+    logging.info(f"📌 Пользователь {user_id} нажал кнопку '📜 Проверить перевод'. Запускаем проверку переводов.")
+
+    # ✅ Формируем переводы в нужном формате (чтобы избежать ошибки "неверный формат")
+    formatted_translations = []
+    for t in context.user_data["pending_translations"]:
+        match = re.match(r"^(\d+)\.\s*(.+)", t)  # Извлекаем номер и перевод
+        if match:
+            formatted_translations.append(f"{match.group(1)}. {match.group(2)}")
+
+    # Если нет отформатированных переводов, выдаём ошибку
+    if not formatted_translations:
+        await update.message.reply_text("❌ Ошибка: Нет переводов для проверки!")
+        return
+
+    # ✅ Формируем команду "/translate" с нужным форматом
+    translation_text = "/translate\n" + "\n".join(formatted_translations)
+
+    # ✅ Очищаем список ожидающих переводов (чтобы повторно не сохранялись)
+    context.user_data["pending_translations"] = []
+
+    # ✅ Логируем перед передачей в `check_user_translation()`
+    logging.info(f"📜 Передаём в check_user_translation():\n{translation_text}")
+
+    # ✅ Отправляем текст в `check_user_translation()`
+    await check_user_translation(update, context, translation_text)
+
+    
+
+async def start(update: Update, context: CallbackContext):
+    """Запуск бота и отправка главного меню."""
+    await update.message.reply_text("Привет! Это бот для перевода.")
+    await send_main_menu(update, context)
+
+
+async def start_timer(chat_id, context: CallbackContext, message_id, user_id):
+    """Обновляет таймер в Телеграме."""
+    if "start_times" not in context.user_data or user_id not in context.user_data["start_times"]:
+        print(f"❌ Ошибка: `start_times` не найден для пользователя {user_id}!")
+        return
+
+    start_time = context.user_data["start_times"][user_id]
+    context.user_data["timer_message_id"] = message_id
+
+    while user_id in context.user_data["start_times"]:
+        elapsed_time = datetime.now() - start_time
+        minutes, seconds = divmod(elapsed_time.seconds, 60)
+
+        try:
+            if seconds % 20 == 0:  # ✅ Обновляем раз в 20 секунд
+                await context.bot.edit_message_text(
+                    chat_id=chat_id,
+                    message_id=context.user_data["timer_message_id"],
+                    text=f"⏳ Время перевода: {minutes} мин {seconds} сек"
+                )
+        except Exception as e:
+            print(f"⚠️ Ошибка при обновлении таймера: {e}")
+            await asyncio.sleep(20)  # Telegram рекомендует 20 секунд задержки при Flood Control
+
+        await asyncio.sleep(5)  # ✅ Повторяем цикл каждые 5 секунд
+
+
+# === Логирование ===
+logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
+
+async def log_message(update: Update, context: CallbackContext):
+    """логируются (сохраняются) все сообщения пользователей в базе данных"""
+    if not update.message: #Если update.message отсутствует, значит, пользователь отправил что-то другое (например, фото, видео, стикер).
+        return #В таком случае мы не логируем это и просто выходим из функции
+    
+    user = update.message.from_user # Данные о пользователе содержит ID и имя пользователя.
+    message_text = update.message.text.strip() if update.message else "" #сам текст сообщения.
+
+    if not message_text:
+        print("⚠️ Пустое сообщение — пропускаем логирование.")
+        return
+    
+    username = user.username or f"{user.first_name or ''} {user.last_name or ''}".strip()
+    # Логируем данные для диагностики
+    print(f"📥 Получено сообщение от {username} ({user.id}): {message_text}")
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    try: 
+        cursor.execute("""
+            INSERT INTO messages_deepseek (user_id, username, message)
+            VALUES(%s, %s, %s);
+            """,
+            (user.id, username, message_text)
+        )
+
+        conn.commit()
+    except Exception as e:
+        print(f"❌ Ошибка при записи в базу: {e}")
+    finally:
+        cursor.close()
+        conn.close()
+
+# утреннее приветствие членом группы
+async def send_morning_reminder(context:CallbackContext):
+    time_now= datetime.now().time()
+    # Формируем утреннее сообщение
+    message = (
+        f"🌅 {'Доброе утро' if time(2, 0) < time_now < time(10, 0) else ('Добрый день' if time(10, 1) < time_now < time(17, 0) else 'Добрый вечер')}!\n\n"
+        "Чтобы принять участие в переводе, нажмите на кнопку 📌 Выбрать тему. После выбора темы подтвердите начало с помощью кнопки 🚀 Начать перевод.\n\n"
+        "📌 Важно:\n"
+        "🔹 Переводите максимально точно и быстро.\n\n"
+        "🔹 После перевода всех предложений выполните 📜 Проверить перевод и подтвердите нажатием ✅ Завершить перевод.\n\n"
+        "🔹 В 09:00, 12:00 и 15:00 - промежуточные итоги по каждому участнику.\n\n"
+        "🔹 Итоговые результаты получим в 23:30.\n\n"
+        "🔹 Узнать свою статистику сразу после перевода - /stats.\n"
+    )
+
+    # формируем список команд
+    commands = (
+        "📜 **Доступные команды:**\n"
+        "📌 Выбрать тему - Выбрать тему для перевода\n"
+        "🚀 Начать перевод - Получить предложение для перевода после выбора темы.\n"
+        "📜 Проверить перевод - После отправки предложений, проверить перевод\n"
+        "✅ Завершить перевод - Завершить перевод и зафиксировать время.\n"
+        "/stats - Узнать свою статистику\n"
+    )
+
+    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text = message)
+    #await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text= commands)
+
+
+
+async def letsgo(update: Update, context: CallbackContext):
+    user = update.message.from_user
+    user_id = user.id
+    chat_id = update.message.chat_id  # ✅ Исправленный атрибут
+    username = user.username or user.first_name
+
+     # ✅ Если словаря `start_times` нет — создаём его (это может быть в начале запуска бота, Когда ещё нет словаря)
+    if "start_times" not in context.user_data:
+        context.user_data["start_times"] = {}
+    
+    # ✅ Запоминаем время старта **для конкретного пользователя**
+    context.user_data["start_times"][user_id] = datetime.now()
+
+    # ✅ Отправляем сообщение с таймером
+    timer_message = await update.message.reply_text(f"⏳ Время перевода: 0 мин 0 сек")
+
+    # ✅ Запускаем `start_timer()` с правильными аргументами
+    asyncio.create_task(start_timer(chat_id, context, timer_message.message_id, user_id))
+
+
+    # 🔹 Проверяем, выбрал ли пользователь тему
+    chosen_topic = context.user_data.get("chosen_topic")
+    if not chosen_topic:
+        await update.message.reply_text(
+            "❌ Вы не выбрали тему! Сначала выберите тему используя кнопку '📌 Выбрать тему'"
+        )
+        return  # ⛔ Прерываем выполнение функции, если тема не выбрана
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Проверяем, не запустил ли уже пользователь перевод (но только за СЕГОДНЯ!)
+    cursor.execute("""
+        SELECT user_id FROM user_progress_deepseek
+        WHERE user_id = %s AND start_time::date = CURRENT_DATE AND completed = FALSE;
+        """, (user_id, ))
+    active_session = cursor.fetchone()
+
+    if active_session is not None:
+        logging.info(f"⏳ Пользователь {username} ({user_id}) уже начал перевод сегодня.")
+        #await update.message.reply_animation("https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif")
+        await update.message.reply_text("❌ Вы уже начали перевод! Завершите его перед повторным запуском нажав на кнопку '✅ Завершить перевод'")
+        cursor.close()
+        conn.close()
+        return
+
+    # ✅ **Автоматически завершаем вчерашние сессии**
+    cursor.execute("""
+        UPDATE user_progress_deepseek
+        SET end_time = NOW(), completed = TRUE
+        WHERE user_id = %s AND start_time::date < CURRENT_DATE AND completed = FALSE;
+    """, (user_id,))
+
+    # 🔹 Генерируем session_id на основе user_id + текущего времени
+    session_id = int(hashlib.md5(f"{user_id}{datetime.now()}".encode()).hexdigest(), 16) % (10 ** 12)
+
+    # ✅ **Создаём новую запись в `user_progress`, НЕ ЗАТИРАЯ старые сессии и получаем `session_id`****
+    cursor.execute("""
+        INSERT INTO user_progress_deepseek (session_id, user_id, username, start_time, completed) 
+        VALUES (%s, %s, %s, NOW(), FALSE);
+    """, (session_id, user_id, username))
+    
+    conn.commit()
+
+
+    # ✅ **Выдаём новые предложения**
+    sentences = [s.strip() for s in await get_original_sentences(user_id, context) if s.strip()]
+
+    if not sentences:
+        await update.message.reply_text("❌ Ошибка: не удалось получить предложения. Попробуйте позже.")
+        cursor.close()
+        conn.close()
+        return
+
+    # Определяем стартовый индекс (если пользователь делал /getmore)
+    cursor.execute("""
+        SELECT COUNT(*) FROM daily_sentences_deepseek WHERE date = CURRENT_DATE AND user_id = %s;
+    """, (user_id,))
+    last_index = cursor.fetchone()[0]
+
+    # Добавляем логирование, чтобы видеть, были ли исправления
+    original_sentences = sentences
+    sentences = correct_numbering(sentences)
+
+    for before, after in zip(original_sentences, sentences):
+        if before != after:
+            logging.info(f"⚠️ Исправлена нумерация: '{before}' → '{after}'")
+
+    # Записываем bсе предложения в базу
+    tasks = []
+    for i, sentence in enumerate(sentences, start=last_index + 1):
+        cursor.execute("""
+            INSERT INTO daily_sentences_deepseek (date, sentence, unique_id, user_id, session_id)
+            VALUES (CURRENT_DATE, %s, %s, %s, %s);
+        """, (sentence, i, user_id, session_id))
+        tasks.append(f"{i}. {sentence}")
+
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    logging.info(f"🚀 Пользователь {username} ({user_id}) начал перевод. Записано {len(tasks)} предложений.")
+
+    # 🔹 **Создаём пустой список для переводов пользователя**
+    context.user_data["pending_translations"] = []
+
+
+    # ✅ Отправляем одно сообщение с предложениями **и таймером**
+    task_text = "\n".join(tasks)
+    print(f"Sentences before sending to the user: {task_text}")
+
+    text= (
+    f"🚀 {user.first_name}, Вы начали перевод! Время пошло.\n\n"
+    "✏️ Отправьте ваши переводы в формате: 1. Mein Name ist Konchita.\n\n"
+    )
+
+    await context.bot.send_message(chat_id=update.message.chat_id, text=text)
+
+    await update.message.reply_text(
+        f"{user.first_name}, Ваши предложения:\n{task_text}\n\n"
+        #"После того как вы отправите все переводы, нажмите **'📜 Проверить перевод'**, чтобы проверить их.\n"
+        #"Когда все переводы будут проверены, нажмите **'✅ Завершить перевод'**, чтобы зафиксировать время!"
+    )
+
+
+
+# 🔹 **Функция, которая запоминает переводы, но не проверяет их**
+async def handle_user_message(update: Update, context: CallbackContext):
+    # ✅ Проверяем, содержит ли update.message данные
+    if update.message is None or update.message.text is None:
+        logging.warning("⚠️ update.message отсутствует или пустое.")
+        return  # ⛔ Прерываем выполнение, если сообщение отсутствует
+
+    user_id = update.message.from_user.id
+    text = update.message.text.strip()
+
+    # Проверяем, является ли сообщение переводом (поддержка многострочных сообщений)
+    pattern = re.compile(r"(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)")
+    translations = pattern.findall(text)
+
+    if translations:
+        if "pending_translations" not in context.user_data:
+            context.user_data["pending_translations"] = []
+
+        for num, trans in translations:
+            full_translation = f"{num}. {trans.strip()}"
+            context.user_data["pending_translations"].append(full_translation)
+            logging.info(f"📝 Добавлен перевод: {full_translation}")
+
+        await update.message.reply_text(
+            "✅ Ваш перевод сохранён.\n\n"
+            "Когда будете готовы, нажмите:\n"
+            "📜 Проверить перевод.\n\n"
+            "✅ Завершить перевод чтобы зафиксировать время.\n"
+            )
+    else:
+        await handle_button_click(update, context)
+
+
+
+async def done(update: Update, context: CallbackContext):
+    user = update.message.from_user
+    user_id = user.id
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 🔹 Проверяем, есть ли у пользователя активная сессия
+    cursor.execute("""
+        SELECT session_id
+        FROM user_progress_deepseek 
+        WHERE user_id = %s AND completed = FALSE
+        ORDER BY start_time DESC
+        LIMIT 1;""", 
+        (user_id,))
+    session = cursor.fetchone()
+
+    if not session:
+        await update.message.reply_text("❌ У вас нет активных сессий! Используйте кнопки: '📌 Выбрать тему' -> '🚀 Начать перевод' чтобы начать.")
+        cursor.close()
+        conn.close()
+        return
+    session_id = session[0]   # ID текущей сессии
+
+    # ✅ Позволяем пользователю всегда завершать сессию вручную
+    cursor.execute("""
+        UPDATE user_progress_deepseek
+        SET end_time = NOW(), completed = TRUE
+        WHERE user_id = %s AND completed = FALSE;""",
+        (user_id, ))
+    conn.commit()
+
+    # 🔹 Проверяем, все ли предложения переведены
+    cursor.execute("""
+        SELECT COUNT(*) FROM daily_sentences_deepseek
+        WHERE user_id = %s AND session_id = %s;
+    """, (user_id, session_id))
+    total_sentences = cursor.fetchone()[0]
+
+    cursor.execute("""
+        SELECT COUNT(*) FROM translations_deepseek
+        WHERE user_id = %s AND session_id = %s;
+        """,(user_id, session_id))
+    translated_count = cursor.fetchone()[0]
+
+    if translated_count < total_sentences:
+        await update.message.reply_text(
+            f"⚠️ Вы перевели {translated_count} из {total_sentences} предложений.\n"
+            "Перевод завершён, но не все предложения переведены! Это повлияет на ваш итоговый балл."           
+        )
+    else:
+        await update.message.reply_text("✅ **Вы успешно завершили перевод! Все предложения этой сессии переведены.**")
+
+    cursor.close()
+    conn.close()
+
+
+def correct_numbering(sentences):
+    """!?! Но это выражение требует фиксированный длины шаблона внутри скобок(?<=^\d+\.), Поэтому не подходит.Исправляет нумерацию, удаляя только вторую некорректную цифру.
+    (?<=^\d+\.) — Найди совпадение, но только если перед ним есть число с точкой в начале строки
+    Это называется lookbehind assertion. Например, 29. будет найдено, но не заменено.
+    \s*\d+\.\s* — теперь заменяется только вторая цифра."""
+    corrected_sentences = []
+    for sentence in sentences:
+        # Удаляем только **второе** число, оставляя первое
+        cleaned_sentence = re.sub(r"^(\d+)\.\s*\d+\.\s*", r"\1. ", sentence).strip()
+        corrected_sentences.append(cleaned_sentence)
+    return corrected_sentences
+
+
+# Создаёт кнопки с темами (Business, Medicine, Hobbies и т. д.).
+async def choose_topic(update: Update, context: CallbackContext):
+    print("🔹 Функция choose_topic() вызвана!")  # 👈 Логируем вызов
+    global TOPICS
+    buttons = [[InlineKeyboardButton(topic, callback_data=topic)] for topic in TOPICS]
+    #example of buttons
+    #[
+    #[InlineKeyboardButton("Business", callback_data="Business")],
+    #[InlineKeyboardButton("Medicine", callback_data="Medicine")],
+    #[InlineKeyboardButton("Hobbies", callback_data="Hobbies")]...
+
+    reply_markup = InlineKeyboardMarkup(buttons)
+
+    if update.callback_query:
+        await update.callback_query.message.edit_text("📌 Выберите тему для предложений:", reply_markup=reply_markup)
+    else:
+        await update.message.reply_text("📌 Выберите тему для предложений:", reply_markup=reply_markup) #Отправляем сообщение пользователю с прикреплёнными кнопками.
+
+
+
+# Когда пользователь нажимает на кнопку, Telegram отправляет callback-запрос, который мы обработаем в topic_selected().
+async def topic_selected(update: Update, context: CallbackContext):
+    """Handles the button click event when the user selects a topic."""
+    query = update.callback_query
+    await query.answer()  # Acknowledge the button press: Подтверждаем нажатие кнопки (иначе кнопка будет висеть)
+
+    if not query.data:
+        logging.error("❌ Ошибка: callback_data отсутствует!")
+        return
+
+    chosen_topic = query.data  # Get the selected topic: # Получаем данные (какую кнопку нажали)
+    logging.info(f"✅ Пользователь выбрал тему: {chosen_topic}")
+
+    context.user_data["chosen_topic"] = chosen_topic  # Store it in user data: # Сохраняем выбранную тему в памяти пользователя
+    await query.message.reply_text(f"✅ Вы выбрали тему: {chosen_topic}.\nТеперь нажмите '🚀 Начать перевод'.")
+
+
+
+# === Функция для генерации новых предложений с помощью GPT-4 ===
+async def generate_sentences(user_id, num_sentances, context: CallbackContext = None):
+    client = openai.AsyncOpenAI(api_key=openai.api_key)
+    #client_deepseek = OpenAI(api_key = api_key_deepseek,base_url="https://api.deepseek.com")
+    
+    chosen_topic = context.user_data.get("chosen_topic", "Random sentences")  # Default: General topic
+
+
+    if chosen_topic != "Random sentences":
+        prompt = f"""
+        Придумай {num_sentances} связанных предложений уровня B2-C1 на тему "{chosen_topic}" на **русском языке** для перевода на **немецкий**.
+
+        **Требования:**
+        - Свяжи предложения в одну логичную историю.
+        - Используй **пассивный залог** и **Konjunktiv II** В 30% предложений.
+        - Каждое предложение должно быть **на отдельной строке**.
+        - **НЕ добавляй перевод!** Только оригинальные русские предложения.
+        - Предложения должны содержать часто употребительную в повседневной жизни лексику и грамматику.
+            
+        **Пример формата вывода:**
+        Если бы у него был друг рядом, играть было бы веселее.
+        Зная, что скоро нужно идти домой, он постарался использовать каждую минуту.
+        Когда стало темнеть, он попрощался с соседским котом и побежал в дом.
+        Сделав уроки, он лёг спать с мыслями о завтрашнем дне.
+        """
+        
+    else:
+        prompt = f"""
+        Придумай {num_sentances} предложений уровня B2-C1 на **русском языке** для перевода на **немецкий**.
+            
+        **Требования:**
+        - Используй **пассивный залог** и **Konjunktiv II** В 30% предложений.
+        - Каждое предложение должно быть **на отдельной строке**.
+        - **НЕ добавляй перевод!** Только оригинальные русские предложения.
+        - Предложения должны содержать часто употребительную в повседневной жизни лексику(бизнес медицина, Хобби, Свободное время, Учёба, Работа, Путешествия) и грамматику.
+
+        **Пример формата вывода:**
+        Было бы лучше, если бы он согласился на это предложение.
+        Нам сказали, что проект будет завершен через неделю.
+        Если бы он мог говорить на немецком, он бы легко нашел работу.
+        Сделав работу он пошёл отдыхать.
+        Зная о вежливости немцев я выбрал вежливую формулировку.
+        Не зная его лично, его поступок невозможно понять.
+        Учитывая правила вежливости, он говорил сдержанно.
+        """
+    #Генерация с помощью GPT     
+    for attempt in range(5): # Пробуем до 5 раз при ошибке
+        try:
+            response = await client.chat.completions.create(
+                model = "gpt-4-turbo",
+                messages = [{"role": "user", "content": prompt}]
+            )
+            sentences = response.choices[0].message.content.split("\n")
+            filtered_sentences = [s.strip() for s in sentences if s.strip()] # ✅ Фильтруем пустые строки
+            
+            if filtered_sentences:
+                return filtered_sentences
+            
+        except openai.RateLimitError:
+            wait_time = (attempt +1) * 2 # Задержка: 2, 4, 6 сек...
+            print(f"⚠️ OpenAI API Rate Limit. Ждем {wait_time} сек...")
+            await asyncio.sleep(wait_time)
+    
+    print("❌ Ошибка: не удалось получить ответ от OpenAI. Используем запасные предложения.")
+
+
+    # # Генерация с помощью DeepSeek API
+    # for attempt in range(5): # Пробуем до 5 раз при ошибке
+    #     try:
+    #         response = await client_deepseek.chat.completions.create(
+    #             model = "deepseek-chat",
+    #             messages = [{"role": "user", "content": prompt}], stream=False
+    #         )
+    #         sentences = response.choices[0].message.content.split("\n")
+    #         filtered_sentences = [s.strip() for s in sentences if s.strip()] # ✅ Фильтруем пустые строки
+    #         if filtered_sentences:
+    #             return filtered_sentences
+    #     except openai.RateLimitError:
+    #         wait_time = (attempt +1) * 2 # Задержка: 2, 4, 6 сек...
+    #         print(f"⚠️ OpenAI API Rate Limit. Ждем {wait_time} сек...")
+    #         await asyncio.sleep(wait_time)
+    
+    # print("❌ Ошибка: не удалось получить ответ от OpenAI. Используем запасные предложения.")
+
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+    
+    cursor.execute("""
+        SELECT sentence FROM spare_sentences_deepseek ORDER BY RANDOM() LIMIT 7;""")
+    spare_rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    if spare_rows:
+        return [row[0].strip() for row in spare_rows if row[0].strip()]
+    else:
+        print("❌ Ошибка: даже запасные предложения отсутствуют.")
+        return ["Запасное предложение 1", "Запасное предложение 2"]
+
+
+
+from telegram.helpers import escape_markdown
+
+async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
+    client = openai.AsyncOpenAI(api_key=openai.api_key)
+    
+    message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Ну, глянем что ты тут напереводил...")
+    await simulate_typing(context, update.message.chat_id, duration=3)
+
+    prompt = f"""
+    You are an expert German language teacher. Analyze the student's translation.
+
+    **Original sentence (Russian):** "{original_text}"
+    **User's translation (German):** "{user_translation}"
+
+    **Your task:**
+    1. **Give a score from 0 to 100** based on the original content, correct vocabulary usage, grammatical accuracy (this is the most important criterion when grading), and style. If the content is completely inaccurate, the score is zero.  
+
+    2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
+    - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
+
+    3. **Identify all specific mistake subcategories** (you may select multiple subcategories if needed, but STRICTLY from enumeration below):  
+
+    **Fixed mistake subcategories:**  
+    - **Nouns:** Gendered Articles, Pluralization, Compound Nouns, Declension Errors  
+    - **Cases:** Nominative, Accusative, Dative, Genitive, Akkusativ + Preposition, Dative + Preposition, Genitive + Preposition  
+    - **Verbs:** Placement, Conjugation, Weak Verbs, Strong Verbs, Mixed Verbs, Separable Verbs, Reflexive Verbs, Auxiliary Verbs, Modal Verbs, Verb Placement in Subordinate Clause  
+    - **Tenses:** Present, Past, Simple Past, Present Perfect, Past Perfect, Future, Future 1, Future 2, Plusquamperfekt Passive, Futur 1 Passive, Futur 2 Passive  
+    - **Adjectives:** Endings, Weak Declension, Strong Declension, Mixed Declension, Placement, Comparative, Superlative, Incorrect Adjective Case Agreement  
+    - **Adverbs:** Placement, Multiple Adverbs, Incorrect Adverb Usage  
+    - **Conjunctions:** Coordinating, Subordinating, Incorrect Use of Conjunctions  
+    - **Prepositions:** Accusative, Dative, Genitive, Two-way, Incorrect Preposition Usage  
+    - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
+    - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
+
+    4. **Provide a severity level from 1 to 5** where:  
+    - 1 = Minor stylistic error  
+    - 2 = Common mistake  
+    - 3 = Noticeable grammatical issue  
+    - 4 = Severe grammatical mistake  
+    - 5 = Critical mistake that changes the meaning  
+
+    5. **Provide the correct translation.**  
+
+    ---
+
+    **Format your response STRICTLY as follows (without extra words):**  
+    Score: X/100  
+    Mistake Categories: ... (if there are multiple categories, return them as a comma separated string)  
+    Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)  
+    Severity: ...  
+    Correct Translation: ...  
+
+        """
+
+
+    collected_text = ""
+    last_update_time = asyncio.get_running_loop().time()
+    finished = False
+
+    for attempt in range(3):
+        try:
+            stream_response = await client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "user", "content": prompt}],
+                stream=True
+            )
+
+            async for chunk in stream_response:
+                if finished:
+                    break
+                if chunk.choices[0].delta.content:
+                    new_text = chunk.choices[0].delta.content
+                    collected_text += new_text
+
+                    if asyncio.get_running_loop().time() - last_update_time > 5:
+                        await message.edit_text(collected_text)
+                        last_update_time = asyncio.get_running_loop().time()
+
+            # ✅ Прерываем цикл после успешного получения полного ответа
+            if collected_text and not finished:
+                finished = True
+                
+                await message.edit_text(collected_text)
+            
+            # ✅ Логируем полный ответ для анализа
+            print(f"🔎 FULL RESPONSE:\n{collected_text}")
+
+
+            # ✅ Парсим результат
+            score = collected_text.split("Score: ")[-1].split("/")[0].strip() if "Score:" in collected_text else None
+            
+            #my offer to split by ", " because it is a string and take all list
+            # ✅ Ограничиваем строку до конца строки с помощью split("\n")[0]
+            categories = collected_text.split("Mistake Categories: ")[-1].split("\n")[0].split(", ") if "Mistake Categories:" in collected_text else []
+            subcategories = collected_text.split("Subcategories: ")[-1].split("\n")[0].split(", ") if "Subcategories:" in collected_text else []
+
+            severity = collected_text.split("Severity: ")[-1].split("\n")[0].strip() if "Severity:" in collected_text and len(collected_text.split("Severity: ")[-1].split("\n")) > 0 else None
+            correct_translation = collected_text.split("Correct Translation: ")[-1].strip() if "Correct Translation:" in collected_text else None
+            
+            # ✅ Логируем До обработки
+            print(f"🔎 RAW CATEGORIES BEFORE HANDLING in check_translation function (User {update.message.from_user.id}): {', '.join(categories)}")
+            print(f"🔎 RAW SUBCATEGORIES BEFORE HANDLING in check_translation function (User {update.message.from_user.id}): {', '.join(subcategories)}")
+            
+            # my offer for category: i would reduce all unneccessary symbols not only ** except from words and commas (what do you think!?)
+            categories = [re.sub(r"[^0-9a-zA-Z\s,+\-–]", "", cat).strip() for cat in categories if cat.strip()]
+            # my offer for subcategory: i would reduce all unneccessary symbols not only ** except from words and commas (what do you think!?)
+            subcategories = [re.sub(r"[^0-9a-zA-Z\s,+\-–]", "", subcat).strip() for subcat in subcategories if subcat.strip()]
+
+            # ✅ Преобразуем строки в списки: my offer
+            categories = [cat.strip() for cat in categories if cat.strip()]
+            subcategories = [subcat.strip() for subcat in subcategories if subcat.strip()]
+
+            # ✅ Логируем
+            print(f"🔎 RAW CATEGORIES AFTER HANDLING in check_translation function (User {update.message.from_user.id}): {', '.join(categories)}")
+            print(f"🔎 RAW SUBCATEGORIES AFRET HANDLING (User {update.message.from_user.id}): {', '.join(subcategories)}")
+
+            
+            if not categories:
+                print(f"⚠️ Категории отсутствуют в ответе GPT")
+            if not subcategories:
+                print(f"⚠️ Подкатегории отсутствуют в ответе GPT")
+
+
+            # ✅ Убираем лишние пробелы для ровного форматирования
+            result_text = f"""
+🟢 *Sentence number*: {escape_markdown(str(sentence_number))}\n
+✅ *Score:* {escape_markdown(str(score))}/100\n
+🔴 *Mistake Categories:* {escape_markdown(', '.join(categories[:2]) or "No mistakes")}\n
+🔴 *Mistake Subcategory:* {escape_markdown(', '.join(subcategories[:2]) or "No mistakes")}\n
+🔵 *Original Sentence:* {escape_markdown(original_text)}\n
+🟡 *User Translation:* {escape_markdown(user_translation)}\n
+🟣 *Correct Translation:* {escape_markdown(correct_translation)}\n
+📌 *Mistake Severity:* {escape_markdown(str(severity) or "0")}
+"""
+
+            # ✅ Если балл > 75 → стилистическая ошибка
+            if score and score.isdigit() and int(score) > 75:
+                result_text += "\n✅ Перевод на высоком уровне — считаем это незначительной ошибкой."
+
+            # ✅ Отправляем текст в Telegram с поддержкой Markdown
+            await context.bot.send_message(
+                chat_id=update.message.chat_id,
+                text=result_text,
+                parse_mode="Markdown"
+            )
+
+            # ✅ Удаляем сообщение с индикатором "Генерация ответа"
+            await message.delete()
+
+            # ✅ Логируем успешную проверку
+            logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
+
+            return result_text, categories, subcategories, score, severity, correct_translation
+
+        except TelegramError as e:
+            if 'flood control' in str(e).lower():
+                wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
+                wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
+                print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
+                await asyncio.sleep(wait_time)
+         
+        
+        except openai.RateLimitError:
+            wait_time = (attempt + 1) * 5
+            print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
+            await asyncio.sleep(wait_time)
+
+
+        # ✅ Добавляем универсальный блок обработки ошибок:
+        except Exception as e:
+            print(f"❌ Непредвиденная ошибка в цикле обработки GPT: {e}")
+            logging.error(f"❌ Непредвиденная ошибка: {e}")
+            
+    # # ✅ Если три попытки провалились — пробуем Claude
+    # print(f"⚠️ GPT не справился — пробуем Claude...")
+    # return await check_translation_with_claude(original_text, user_translation, update, context)
+
+
+
+# ✅ Fallback на Claude
+# async def check_translation_with_claude(original_text, user_translation, update, context):
+#     client = anthropic.AsyncAnthropic(api_key=CLAUDE_API_KEY)
+
+#     prompt = f"""
+#     You are an expert German language teacher. Analyze the student's translation.
+
+#     **Original sentence (Russian):** "{original_text}"
+#     **User's translation (German):** "{user_translation}"
+
+#     **Your task:**
+#     1. **Give a score from 0 to 100** based on the original content, correct vocabulary usage, grammatical accuracy (this is the most important criterion when grading), and style. If the content is completely inaccurate, the score is zero.  
+
+#     2. **Identify all mistake categories** (you may select multiple categories if needed, but only from enumeration below):  
+#     - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
+
+#     3. **Identify all specific mistake subcategories** (you may select multiple subcategories if needed, but only from enumeration below):  
+#     - **Nouns:** Gendered Articles, Pluralization, Compound Nouns, Declension Errors  
+#     - **Cases:** Nominative, Accusative, Dative, Genitive, Akkusativ + Preposition, Dative + Preposition, Genitive + Preposition  
+#     - **Verbs:** Placement, Conjugation, Weak Verbs, Strong Verbs, Mixed Verbs, Separable Verbs, Reflexive Verbs, Auxiliary Verbs, Modal Verbs, Verb Placement in Subordinate Clause  
+#     - **Tenses:** Present, Past, Simple Past, Present Perfect, Past Perfect, Future, Future 1, Future 2, Plusquamperfekt Passive, Futur 1 Passive, Futur 2 Passive  
+#     - **Adjectives:** Endings, Weak Declension, Strong Declension, Mixed Declension, Placement, Comparative, Superlative, Incorrect Adjective Case Agreement  
+#     - **Adverbs:** Placement, Multiple Adverbs, Incorrect Adverb Usage  
+#     - **Conjunctions:** Coordinating, Subordinating, Incorrect Use of Conjunctions  
+#     - **Prepositions:** Accusative, Dative, Genitive, Two-way, Incorrect Preposition Usage  
+#     - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
+#     - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
+
+#     4. **Provide a severity level from 1 to 5** where:  
+#     - 1 = Minor stylistic error  
+#     - 2 = Common mistake  
+#     - 3 = Noticeable grammatical issue  
+#     - 4 = Severe grammatical mistake  
+#     - 5 = Critical mistake that changes the meaning  
+
+#     5. **List all identified mistakes** → if there are multiple mistakes, return them as a list.  
+
+#     6. **Provide the correct translation.**  
+
+#     ---
+
+#     **Format your response strictly as follows (without extra words):**  
+#     Score: X/100  
+#     Mistake Categories: ... (comma separated)  
+#     Subcategories: ... (comma separated)  
+#     Severity: ...  
+#     Correct Translation: ...  
+#     """
+
+#     try:
+#         response = await client.messages.create(
+#             model="claude-3-7-sonnet-20250219",
+#             messages=[{"role": "user", "content": prompt}],
+#             max_tokens=500,
+#             temperature=0.2
+#         )
+
+#         if response and hasattr(response, "content"):
+#             return response.content.strip()
+#         else:
+#             logging.warning("⚠️ Claude returned an empty response.")
+#             return "❌ Ошибка: Claude вернул пустой ответ"
+#     except Exception as e:
+#         logging.error(f"❌ Ошибка при проверке перевода в Claude: {e}")
+#         await context.bot.send_message(
+#             chat_id=update.message.chat_id,
+#             text="❌ Произошла ошибка при проверке перевода. Попробуйте позже."
+#     )
+
+
+
+async def log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, severity, correct_translation):
+    global VALID_CATEGORIES, VALID_SUBCATEGORIES, VALID_CATEGORIES_lower, VALID_SUBCATEGORIES_lower
+    #client = anthropic.Client(api_key=CLAUDE_API_KEY)
+
+    # ✅ Логируем нормализованные значения
+    if categories:
+        print(f"🔎 LIST OF CATEGORIES FROM log_translation_function: {', '.join(categories)}")
+
+    if subcategories:
+        print(f"🔎 LIST OF SUBCATEGORIES log_translation_function: {', '.join(subcategories)}")
+
+
+    # ✅ Перебираем все сочетания категорий и подкатегорий
+    valid_combinations = []
+    for cat in categories:
+        cat_lower =cat.lower() # Приводим к нижнему регистру для соответствия VALID_SUBCATEGORIES
+        for subcat in subcategories:
+            subcat_lower = subcat.lower() # Приводим к нижнему регистру для соответствия VALID_SUBCATEGORIES
+            if cat_lower in VALID_SUBCATEGORIES_lower and subcat_lower in VALID_SUBCATEGORIES_lower[cat_lower]:
+                # ✅ Добавляем НОРМАЛИЗОВАННЫЕ значения для последующей обработки
+                valid_combinations.append((cat_lower, subcat_lower))
+
+
+    # ✅ Если есть хотя бы одно совпадение → логируем ВСЕ совпадения
+    if valid_combinations:
+        print(f"✅ Найдены следующие валидные комбинации ошибок выведенные в формате lower:")
+        for main_category_lower, sub_category_lower in valid_combinations:
+            print(f"➡️ {main_category_lower} - {sub_category_lower}")
+
+    else:
+        # ❗ Если не удалось классифицировать → помечаем как неклассифицированную ошибку
+        print(f"⚠️ Ошибка классификации — помечаем как неклассифицированную.")
+        valid_combinations.append(("Other mistake", "Unclassified mistake"))
+
+
+    # ✅ Извлекаем уровень серьёзности ошибки (по умолчанию ставим 3)
+    severity = int(severity) if severity else 3
+
+    # ✅ Проверка на идеальный перевод
+    score = int(score) if score else 0
+
+
+    # ✅ Если нет ошибок — не записываем в базу
+    if len(valid_combinations) == 0:
+        print(f"✅ Нет categories and subcategories соответствующих названию ошибок в базе данных — пропускаем запись в базу.")
+        return
+
+    # ✅ Убираем дубли из valid_combinations (чтобы не логировать одно и то же)
+    valid_combinations = list(set(valid_combinations))
+
+
+    # ✅ Логирование финальных данных для каждой комбинации
+    for main_category, sub_category in valid_combinations:
+        # ✅ Восстанавливаем оригинальные значения перед записью в базу данных
+        main_category = next((cat for cat in VALID_CATEGORIES if cat.lower() == main_category), main_category)
+        sub_category = next((subcat for subcat in VALID_SUBCATEGORIES.get(main_category, []) if subcat.lower() == sub_category), sub_category)
+        
+        if main_category == "Other mistake" and sub_category == "Unclassified mistake":
+            print(f"⚠️ Ошибка '{main_category} - {sub_category}' добавлена в базу как неклассифицированная.")
+        else:
+            print(f"✅ Классифицировано: '{main_category} - {sub_category}'")
+
+        print(f"🔍 Перед записью в БД: main_category = {main_category} | sub_category = {sub_category}")
+
+        if not isinstance(user_id, int) or not isinstance(severity, int):
+            print(f"❌ Ошибка типа данных: user_id = {type(user_id)}, severity = {type(severity)}")
+            return
+
+        if not isinstance(main_category, str) or not isinstance(sub_category, str):
+            print(f"❌ Ошибка типа данных: main_category = {type(main_category)}, sub_category = {type(sub_category)}")
+            return
+
+
+        # ✅ Запись в базу данных
+        conn = get_db_connection()
+        cursor = conn.cursor()
+
+        try:
+            cursor.execute("""
+                INSERT INTO detailed_mistakes_deepseek (
+                    user_id, sentence, added_data, main_category, sub_category, severity, mistake_count
+                ) VALUES (%s, %s, NOW(), %s, %s, %s, 1)
+                ON CONFLICT (user_id, sentence, main_category, sub_category)
+                DO UPDATE SET
+                    mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
+                    last_seen = NOW();
+            """, (user_id, original_text, main_category, sub_category, severity))
+            conn.commit()
+            
+            print(f"✅ Ошибка '{main_category} - {sub_category}' успешно записана в базу.")
+        
+        except Exception as e:
+            print(f"❌ Ошибка при записи в БД: {e}")
+        
+        finally:
+            cursor.close()
+            conn.close()
+
+    # ✅ Логирование успешного завершения обработки
+    print(f"✅ Все ошибки успешно обработаны!")
+
+
+
+async def check_user_translation(update: Update, context: CallbackContext, translation_text=None):
+    
+    if update.message is None or update.message.text is None:
+        logging.warning("⚠️ update.message отсутствует в check_user_translation().")
+        return
+    
+    if "pending_translations" in context.user_data and context.user_data["pending_translations"]:
+        translation_text = "\n".join(context.user_data["pending_translations"])
+        context.user_data["pending_translations"] = []
+    
+    # Убираем команду "/translate", оставляя только переводы
+    # message_text = update.message.text.strip()
+    # translation_text = message_text.replace("/translate", "").strip()
+
+    # Разбираем входной текст на номера предложений и переводы
+    pattern = re.compile(r"(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)")
+    translations = pattern.findall(translation_text)
+    
+    print(f"✅ Извлечено {len(translations)} переводов: {translations}")
+
+    if not translations:
+        await update.message.reply_text("❌ Ошибка: Формат перевода неверен. Должно быть: 1. <перевод>")
+        return
+
+    # Получаем ID пользователя
+    user_id = update.message.from_user.id
+    username = update.message.from_user.first_name
+
+    # Подключаемся к базе данных
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # Получаем разрешённые номера предложений
+    cursor.execute("""
+        SELECT unique_id FROM daily_sentences_deepseek WHERE date = CURRENT_DATE AND user_id = %s
+    """, (user_id,))
+    
+    allowed_sentences = {row[0] for row in cursor.fetchall()}  # Собираем в set() для быстрого поиска
+
+    # Проверяем каждое предложение
+    results = []  # Храним результаты для Telegram
+
+    for number_str, user_translation in translations:
+        try:
+            sentence_number = int(number_str)
+
+            # Проверяем, принадлежит ли это предложение пользователю
+            if sentence_number not in allowed_sentences:
+                results.append(f"❌ Ошибка: Предложение {sentence_number} вам не принадлежит!")
+                continue
+
+            # Получаем оригинальный текст предложения
+            cursor.execute("""
+                SELECT id, sentence, session_id FROM daily_sentences_deepseek 
+                WHERE date = CURRENT_DATE AND unique_id = %s AND user_id = %s;
+            """, (sentence_number, user_id))
+
+            row = cursor.fetchone()
+
+            if not row:
+                results.append(f"❌ Ошибка: Предложение {sentence_number} не найдено.")
+                continue
+
+            sentence_id, original_text, session_id = row
+
+            # Проверяем, отправлял ли этот пользователь перевод этого предложения
+            cursor.execute("""
+                SELECT id FROM translations_deepseek 
+                WHERE user_id = %s AND sentence_id = %s AND timestamp::date = CURRENT_DATE;
+            """, (user_id, sentence_id))
+
+            existing_translation = cursor.fetchone()
+            if existing_translation:
+                results.append(f"⚠️ Вы уже переводили предложение {sentence_number}. Только первый перевод учитывается!")
+                continue
+
+            logging.info(f"📌 Проверяем перевод №{sentence_number}: {user_translation}")
+
+            # Проверяем перевод через GPT
+            MAX_FEEDBACK_LENGTH = 1000  # Ограничим длину комментария GPT
+
+            try:
+                feedback, categories, subcategories, score, severity, correct_translation = await check_translation(original_text, user_translation, update, context, sentence_number)
+
+            except Exception as e:
+                print(f"⚠️ Ошибка при проверке перевода №{sentence_number}: {e}")
+                feedback = "⚠️ Ошибка: не удалось проверить перевод."
+
+            score = int(score) if score else 0
+
+            # Обрезаем, если слишком длинный
+            if len(feedback) > MAX_FEEDBACK_LENGTH:
+                feedback = feedback[:MAX_FEEDBACK_LENGTH] + "...\n⚠️ Ответ GPT был сокращён."
+            
+            # ✅ Добавляем результат для последующей отправки    
+            results.append(f"📜 **Предложение {sentence_number}**\n🎯 Оценка: {feedback}")
+
+            # ✅ Сохраняем перевод в базу данных с защитой от ошибок
+            cursor.execute("""
+                INSERT INTO translations_deepseek (user_id, session_id, username, sentence_id, user_translation, score, feedback)
+                VALUES (%s, %s, %s, %s, %s, %s, %s);
+            """, (user_id, session_id, username, sentence_id, user_translation, score, feedback))
+
+            conn.commit()
+
+            if score == 100:
+                print(f"✅ Перевод выполнен идеально ({score}/100) — пропускаем запись в базу данных.")
+                continue
+        
+            if score > 75:
+                print(f"✅ Перевод на высоком уровне ({score}/100) — считаем это стилистической ошибкой.")
+                continue
+            
+            # ✅ Если оценка < 75 → только тогда сохраняем в базу
+            try:
+                await log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, severity, correct_translation)
+            
+            except Exception as e:
+                print(f"⚠️ Ошибка при записи ошибки в detailed_mistakes_deepseek: {e}")
+
+        except Exception as e:
+            logging.error(f"❌ Ошибка обработки предложения {number_str}: {e}")
+            
+    cursor.close()
+    conn.close()
+
+
+
+async def get_original_sentences(user_id, context: CallbackContext):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    try:
+    
+        # Выполняем SQL-запрос: выбираем 2 случайных предложений из базы данных в которую мы предварительно поместили предложение
+        cursor.execute("SELECT sentence FROM sentences_deepseek ORDER BY RANDOM() LIMIT 2;")
+        rows = [row[0] for row in cursor.fetchall()]   # Возвращаем список предложений
+        print(f"📌 Найдено в базе данных: {rows}") # ✅ Логируем результат
+        
+
+        cursor.execute("""
+            SELECT sentence FROM detailed_mistakes_deepseek
+            WHERE user_id = %s
+            ORDER BY mistake_count DESC, last_seen ASC
+            LIMIT 5; 
+        """, (user_id, ))
+        mistake_sentences = [row[0] for row in cursor.fetchall()]
+        print(f"⚠️ Предложения из ошибок: {mistake_sentences}") # ✅ Логируем результат
+
+        # 🔹 3. Определяем, сколько предложений не хватает до 7
+        num_sentences = 7 - len(rows) - len(mistake_sentences)
+        print(f"📌 Найдено: {len(rows)} в базе данных + {len(mistake_sentences)} повторение ошибок. Генерируем ещё {num_sentences} предложений.")
+
+        # 📌 3. Остальные предложений генерируем через GPT
+        print("⚠️ Генерируем дополнительные предложения через GPT-4...")
+        if num_sentences > 0:
+            gpt_sentences = await generate_sentences(user_id, num_sentences, context)  # Если предложений нет — вызываем GPT-4
+            print(f"🚀 Сгенерированные GPT предложения: {gpt_sentences}") # ✅ Логируем результат
+        else:
+            gpt_sentences = []
+        
+        # ✅ Проверяем финальный список предложений
+        final_sentences = rows + mistake_sentences + gpt_sentences
+        print(f"✅ Финальный список предложений: {final_sentences}")
+        
+        if not final_sentences:
+            print("❌ Ошибка: Не удалось получить предложения!")
+            return []  # Вернём пустой список в случае ошибки
+        
+        return rows + mistake_sentences + gpt_sentences
+    
+    finally: # Закрываем курсор и соединение **в конце**, независимо от того, какая ветка выполнялась
+        cursor.close()
+        conn.close()
+
+# Указываем ID нужных каналов
+PREFERRED_CHANNELS = [
+    "UCthmoIZKvuR1-KuwednkjHg",  # Deutsch mit Yehor
+    "UCHLkEhIoBRu2JTqYJlqlgbw",  # Deutsch mit Rieke
+    "UCeVQK7ZPXDOAyjY0NYqmX-Q"   # Benjamin - Der Deutschlehrer
+]
+
+def search_youtube_videous(topic, max_results=5):
+    query=topic
+    if not YOUTUBE_API_KEY:
+        print("❌ Ошибка: YOUTUBE_API_KEY не задан!")
+        return []
+    try:
+        youtube = build("youtube", "v3", developerKey=YOUTUBE_API_KEY)
+        
+        # Поиск по приоритетным каналам
+        video_data = []
+        for channal_id in PREFERRED_CHANNELS:
+
+            request = youtube.search().list(
+                part="snippet",
+                q=query,
+                type="video",
+                maxResults=max_results,
+                channelId=channal_id
+            )
+            response = request.execute()
+
+            for item in response.get("items", []):
+                title = item["snippet"]["title"]
+                title = title.replace('{', '{{').replace('}', '}}') # Экранирование фигурных скобок
+                title = title.replace('%', '%%') # Экранирование символов % 
+                video_id = item["id"].get("videoId", "") # Безопасное извлечение videoId
+                #video_url = f"https://www.youtube.com/watch?v={video_id}"
+                if video_id:
+                    video_data.append({'title': title, 'video_id': video_id})     
+
+        # Если не найдено видео на приоритетных каналах, ищем по всем каналам
+        if not video_data:
+            print("❌ Видео на приоритетных каналах не найдено — ищем по всем каналам.")
+            request = youtube.search().list(
+                part="snippet",
+                q=query,
+                type="video",
+                maxResults=max_results,
+                relevanceLanguage="de",
+                regionCode="DE"
+            )
+            responce = request.execute()
+
+            for item in responce.get("items", []):
+                title = item["snippet"]["title"]
+                title = title.replace('{', '{{').replace('}', '}}') # Экранирование фигурных скобок
+                title = title.replace('%', '%%') # Экранирование символов % 
+                video_id = item["id"].get("videoId", "") # Безопасное извлечение videoId
+                #video_url = f"https://www.youtube.com/watch?v={video_id}"
+                if video_id:
+                    video_data.append({'title': title, 'video_id': video_id})
+                                  
+        if not video_data:
+            return ["❌ Видео не найдено. Попробуйте позже."]
+        
+        # ✅ Теперь получаем количество просмотров для всех найденных видео
+        video_ids =  ",".join([video['video_id'] for video in video_data if video['video_id']])
+        if video_ids:
+            stats_request = youtube.videos().list(
+                part = "statistics",
+                id=video_ids
+            )
+            stats_response = stats_request.execute()
+
+            for item in stats_response.get("items", []):
+                video_id = item["id"]
+                view_count = int(item["statistics"].get("viewCount", 0))
+                for video in video_data:
+                    if video['video_id'] == video_id:
+                        video["views"] = view_count
+
+        # ✅ Подставляем значение по умолчанию (если данных о просмотрах нет)
+        for video in video_data:
+            video.setdefault("views", 0)
+
+        # ✅ Сортируем по количеству просмотров (по убыванию)
+        sorted_videos = sorted(video_data, key=lambda x: x["views"], reverse=True)
+
+        # ✅ Возвращаем только 2 самых популярных видео
+        top_videos = sorted_videos[:2]
+
+        # ✅ Формируем ссылки в Telegram-формате
+        preferred_videos = [
+            f"[▶️ {escape_markdown_v2(video['title'])}](https://www.youtube.com/watch?v={video['video_id']})"
+            for video in top_videos
+        ]
+
+        return preferred_videos
+    
+    except Exception as e:
+        print(f"❌ Ошибка при поиске видео в YouTube: {e}")
+        return []
+
+
+#📌 this function will filter and rate mistakes
+async def rate_mistakes(user_id):
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            
+            # we calculate amount of translated sentences of the user in a week 
+            cursor.execute("""
+                SELECT COUNT(sentence_id) 
+                FROM translations_deepseek 
+                WHERE user_id = %s AND timestamp >= NOW() - INTERVAL '6 days'; 
+            """, (user_id,))
+            total_sentences = cursor.fetchone()
+            total_sentences = total_sentences[0] if isinstance(total_sentences, tuple) else total_sentences or 0
+
+            # ✅ 2. Select and calculate all mistakes KPI within a week
+            cursor.execute("""
+                WITH user_mistakes AS (
+                    SELECT COUNT(*) AS mistakes_week
+                    FROM detailed_mistakes_deepseek
+                    WHERE user_id = %s
+                    AND added_data >= NOW() - INTERVAL '6 days'
+                ),
+                top_category AS (
+                    SELECT main_category
+                    FROM detailed_mistakes_deepseek
+                    WHERE user_id = %s
+                    AND added_data >= NOW() - INTERVAL '6 days'
+                    GROUP BY main_category
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 1
+                ),
+                number_of_topcategory_mist AS (
+                    SELECT main_category, COUNT(*) AS number_of_top_category_mistakes
+                    FROM detailed_mistakes_deepseek
+                    WHERE user_id = %s
+                    AND added_data >= NOW() - INTERVAL '6 days'
+                    AND main_category = (SELECT main_category FROM top_category)
+                    GROUP BY main_category
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 1
+                ),
+                top_two_subcategories AS (
+                    SELECT sub_category, 
+                        COUNT(*) AS count,
+                        ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) AS subcategory_rank
+                    FROM detailed_mistakes_deepseek 
+                    WHERE user_id = %s
+                    AND added_data >= NOW() - INTERVAL '6 days'
+                    AND main_category = (SELECT main_category FROM top_category)
+                    GROUP BY sub_category
+                    ORDER BY COUNT(*) DESC
+                    LIMIT 2
+                )
+                -- ✅ FINAL QUERY WITH LEFT JOIN TO AVOID EMPTY RESULTS
+                SELECT 
+                    COALESCE((SELECT mistakes_week FROM user_mistakes), 0) AS mistakes_week,
+                    COALESCE(ntc.main_category, 'неизвестно') AS top_mistake_category,
+                    COALESCE(ntc.number_of_top_category_mistakes, 0) AS number_of_top_category_mistakes,
+                    COALESCE(MAX(CASE WHEN tts.subcategory_rank = 1 THEN tts.sub_category END), 'неизвестно') AS top_subcategory_1,
+                    COALESCE(MAX(CASE WHEN tts.subcategory_rank = 2 THEN tts.sub_category END), 'неизвестно') AS top_subcategory_2
+                FROM number_of_topcategory_mist ntc
+                LEFT JOIN top_two_subcategories tts ON TRUE
+                GROUP BY ntc.main_category, ntc.number_of_top_category_mistakes;
+            """, (user_id, user_id, user_id, user_id))
+
+            # ✅ ОБРАБАТЫВАЕМ СЛУЧАЙ, КОГДА ВОЗВРАЩАЕТСЯ МЕНЬШЕ ДАННЫХ
+            result = cursor.fetchone()
+            if result is not None:
+                # Распаковываем все значения с защитой от отсутствия данных
+                mistakes_week, top_mistake_category, number_of_top_category_mistakes, top_mistake_subcategory_1, top_mistake_subcategory_2 = result
+            else:
+                # Если нет данных — возвращаем пустые значения
+                mistakes_week, top_mistake_category, number_of_top_category_mistakes, top_mistake_subcategory_1, top_mistake_subcategory_2 = 0, 'неизвестно', 0, 'неизвестно', 'неизвестно'
+
+
+    return total_sentences, mistakes_week, top_mistake_category, number_of_top_category_mistakes, top_mistake_subcategory_1, top_mistake_subcategory_2
+
+
+# ✅ Функция для проверки статуса ссылки
+async def check_url(url):
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url) as response:
+                if response.status == 200:
+                    return True
+                else:
+                    print(f"⚠️ Ошибка ссылки {url} - Статус: {response.status}")
+                    return False
+    except Exception as e:
+        print(f"❌ Ошибка при проверке ссылки {url}: {e}")
+        return False
+
+
+def escape_markdown_v2(text):
+    # Экранируем только спецсимволы Markdown
+    escape_chars = r'_*[]()~`>#+-=|{}.!'
+    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
+
+
+
+# 📌📌📌📌📌
+async def send_me_analytics_and_recommend_me(context: CallbackContext):
+    client = openai.AsyncOpenAI(api_key=openai.api_key)
+    
+    #get all user_id's from _DB to itterate over them and send them recommendations
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+            SELECT DISTINCT user_id FROM detailed_mistakes_deepseek;
+            """)
+            user_ids = cursor.fetchall()
+    if not user_ids:
+        print("❌ Нет пользователей с ошибками за последнюю неделю.")
+        return
+
+    for user_id, in user_ids:
+        total_sentences, mistakes_week, top_mistake_category, number_of_top_category_mistakes, top_mistake_subcategory_1, top_mistake_subcategory_2 = await rate_mistakes(user_id)
+
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                cursor.execute("""
+                    SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;""",
+                    (user_id, ))
+
+                result = cursor.fetchone()
+                username = result[0] if result else "Unknown User"
+
+        # ✅ Запрашиваем тему у OpenAI
+        prompt = f"""
+        Ты эксперт по изучению грамматики немецкого языка.  
+        Пользователь допустил следующие ошибки:  
+
+        - **Категория ошибки:** {top_mistake_category}  
+        - **Первая подкатегория:** {top_mistake_subcategory_1}  
+        - **Вторая подкатегория:** {top_mistake_subcategory_2}  
+
+        Определи для пользователя тему грамматики для проработки и изучение на основе этих данных (например, "Plusquamperfekt"). 
+        **Выводи только одно слово или короткую фразу**.
+        """
+
+        for attempt in range(5):
+            try:
+                response = await client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "user", "content": prompt}]
+                )
+                topic = response.choices[0].message.content.strip()
+                print(f"📌 Определена тема: {topic}")
+                break
+            except openai.RateLimitError:
+                wait_time = (attempt + 1 )*5
+                print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
+                await asyncio.sleep(wait_time)
+            except Exception as e:
+                print(f"⚠️ Ошибка OpenAI: {e}")
+                continue
+            
+        # ✅ Ищем видео на YouTube только по конкретным каналам
+        video_data = search_youtube_videous(topic)
+
+        # ✅ Добавляем логирование для диагностики
+        if not isinstance(video_data, list):
+            print(f"❌ ОШИБКА: search_youtube_videous вернула {type(video_data)} вместо списка!")
+        if not video_data:
+            print("❌ Видео не найдено. Список пуст.")
+        else:
+            print(f"✅ Найдено {len(video_data)} видео:")
+            for video in video_data:
+                print(f"▶️ {video}")
+        
+        # ✅ Формируем список ссылок только если элемент является словарём
+        # ✅ Нет необходимости преобразовывать снова — список уже готов
+        valid_links = video_data
+
+        
+        if not valid_links:
+            valid_links = ["❌ Не удалось найти видео на YouTube по этой теме. Попробуйте позже."]
+
+
+        # ✅ Формируем сообщение для пользователя
+        recommendations = (
+            f"🧔 *{escape_markdown_v2(username)}, Вы перевели за неделю:* {total_sentences} предложений\n"
+            f"📌 *Переведено с ошибками:* {mistakes_week} предложений\n"
+            f"🔴 *Больше всего ошибок* {number_of_top_category_mistakes} *в категории*:\n {escape_markdown(top_mistake_category) or 'неизвестно'}\n"
+        )
+        if top_mistake_subcategory_1:
+            recommendations += (f"📜 *Основные ошибки в подкатегории:*\n {escape_markdown(top_mistake_subcategory_1)}\n\n")
+        if top_mistake_subcategory_2:
+            recommendations += (f"📜 *Вторые по частоте ошибки в подкатегории:*\n {escape_markdown(top_mistake_subcategory_2)}\n\n")
+        
+        # ✅ Добавляем строку с рекомендацией → ЭТО ВАЖНО!
+        recommendations += (f"🟢 *Рекомендую посмотреть:*\n\n")
+
+
+        # ✅ Добавляем рабочие ссылки
+        recommendations += "\n\n".join(valid_links)
+        
+        #Debugging...
+        print("DEBUG: ", recommendations)
+
+
+        # ✅ Отправляем сообщение пользователю
+        await context.bot.send_message(
+            chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, 
+            text=recommendations,
+            parse_mode = "MarkdownV2"
+            )
+
+
+async def force_finalize_sessions(context: CallbackContext = None):
+    """Завершает ВСЕ незавершённые сессии только за сегодняшний день в 23:59."""
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    cursor.execute("""
+        UPDATE user_progress_deepseek 
+        SET end_time = NOW(), completed = TRUE
+        WHERE completed = FALSE AND start_time::date = CURRENT_DATE;
+    """)
+
+    conn.commit()
+    cursor.close()
+    conn.close()
+
+    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="🔔 **Все незавершённые сессии за сегодня автоматически закрыты!**")
+
+
+
+#SQL Запрос проверено
+async def send_weekly_summary(context: CallbackContext):
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 🔹 Собираем статистику за неделю
+    cursor.execute("""
+        SELECT 
+        t.username, 
+        COUNT(DISTINCT t.sentence_id) AS всего_переводов,
+        COALESCE(AVG(t.score), 0) AS средняя_оценка,
+        COALESCE(p.avg_time, 0) AS среднее_время_сессии_в_минутах, -- ✅ Среднее время сессии
+        COALESCE(p.total_time, 0) AS общее_время_в_минутах, -- ✅ Теперь есть и общее время
+        (SELECT COUNT(*) 
+        FROM daily_sentences_deepseek 
+        WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
+        AND user_id = t.user_id) 
+        - COUNT(DISTINCT t.sentence_id) AS пропущено_за_неделю,
+        COALESCE(AVG(t.score), 0) 
+            - (COALESCE(p.avg_time, 0) * 2) -- ✅ Среднее время в штрафе
+            - ((SELECT COUNT(*) 
+                FROM daily_sentences_deepseek 
+                WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
+                AND user_id = t.user_id) 
+            - COUNT(DISTINCT t.sentence_id)) * 20
+            AS итоговый_балл
+    FROM translations_deepseek t
+    LEFT JOIN (
+        SELECT user_id, 
+            AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, -- ✅ Среднее время сессии
+            SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time -- ✅ Общее время
+        FROM user_progress_deepseek 
+        WHERE completed = TRUE 
+        AND start_time >= CURRENT_DATE - INTERVAL '6 days'
+        GROUP BY user_id
+    ) p ON t.user_id = p.user_id
+    WHERE t.timestamp >= CURRENT_DATE - INTERVAL '6 days'
+    GROUP BY t.username, t.user_id, p.avg_time, p.total_time
+    ORDER BY итоговый_балл DESC;
+
+    """)
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    if not rows:
+        await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="📊 Неделя прошла, но никто не перевел ни одного предложения!")
+        return
+
+    summary = "🏆 Итоги недели:\n\n"
+
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (username, count, avg_score, avg_minutes, total_minutes, missed, final_score) in enumerate(rows):
+        medal = medals[i] if i < len(medals) else "💩"
+        summary += (
+            f"{medal} {username}\n"
+            f"📜 Переведено: {count}\n"
+            f"🎯 Средняя оценка: {avg_score:.1f}/100\n"
+            f"⏱ Время среднее: {avg_minutes:.1f} мин\n"
+            f"⏱ Время общее: {total_minutes:.1f} мин\n"
+            f"🚨 Пропущено: {missed}\n"
+            f"🏆 Итоговый балл: {final_score:.1f}\n\n"
+        )
+
+    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text=summary)
+
+
+
+async def user_stats(update: Update, context: CallbackContext):
+    user_id = update.message.from_user.id
+    username = update.message.from_user.first_name
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 📌 Статистика за сегодняшний день (обновлено для среднего времени) Если за семь дней считать то нужно так: WHERE date BETWEEN CURRENT_DATE - INTERVAL '7 days' AND CURRENT_DATE - INTERVAL '1 day'
+    cursor.execute("""
+        SELECT 
+            COUNT(DISTINCT t.sentence_id) AS переведено,  
+            COALESCE(AVG(t.score), 0) AS средняя_оценка,
+            COALESCE((
+                SELECT AVG(EXTRACT(EPOCH FROM (p.end_time - p.start_time)) / 60)  -- ✅ Используем AVG вместо SUM
+                FROM user_progress_deepseek p
+                WHERE p.user_id = t.user_id 
+                    AND p.start_time::date = CURRENT_DATE
+                    AND p.completed = TRUE
+            ), 0) AS среднее_время_сессии_в_минутах,  -- ✅ Обновили название, чтобы было понятно
+            GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek 
+                        WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) AS пропущено,
+            COALESCE(AVG(t.score), 0) 
+                - (COALESCE((
+                    SELECT AVG(EXTRACT(EPOCH FROM (p.end_time - p.start_time)) / 60)  -- ✅ Здесь тоже AVG
+                    FROM user_progress_deepseek p
+                    WHERE p.user_id = t.user_id 
+                        AND p.start_time::date = CURRENT_DATE
+                        AND p.completed = TRUE
+                ), 0) * 2) 
+                - (GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek
+                                WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
+        FROM translations_deepseek t
+        WHERE t.user_id = %s AND t.timestamp::date = CURRENT_DATE
+        GROUP BY t.user_id;
+    """, (user_id,))
+
+    today_stats = cursor.fetchone()
+
+    # 📌 Недельная статистика (обновлено для среднего времени)
+    cursor.execute("""
+        SELECT 
+            t.user_id,
+            COUNT(DISTINCT t.sentence_id) AS всего_переводов,
+            COALESCE(AVG(t.score), 0) AS средняя_оценка,
+            COALESCE(p.avg_session_time, 0) AS среднее_время_сессии_в_минутах,  
+            COALESCE(p.total_time, 0) AS общее_время_за_неделю,  
+            GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) AS пропущено_за_неделю,
+            COALESCE(AVG(t.score), 0) 
+                - (COALESCE(p.avg_session_time, 0) * 2)  
+                - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
+        FROM translations_deepseek t
+        LEFT JOIN (
+            -- ✅ Отдельный подзапрос для корректного расчёта времени по каждому пользователю
+            SELECT 
+                user_id, 
+                AVG(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) AS avg_session_time, 
+                SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) AS total_time 
+            FROM user_progress_deepseek
+            WHERE completed = TRUE 
+                AND start_time >= CURRENT_DATE - INTERVAL '6 days'
+            GROUP BY user_id
+        ) p ON t.user_id = p.user_id
+        LEFT JOIN (
+            SELECT user_id, COUNT(*) AS total_sentences
+            FROM daily_sentences_deepseek
+            WHERE date >= CURRENT_DATE - INTERVAL '6 days'
+            GROUP BY user_id
+        ) ds ON t.user_id = ds.user_id
+        WHERE t.timestamp >= CURRENT_DATE - INTERVAL '6 days' 
+            AND t.user_id = %s  -- ✅ Фильтр по конкретному пользователю
+        GROUP BY t.user_id, p.avg_session_time, p.total_time, ds.total_sentences;
+    """, (user_id,))
+
+    weekly_stats = cursor.fetchone()
+
+    cursor.close()
+    conn.close()
+
+    # 📌 Формирование ответа
+    if today_stats:
+        today_text = (
+            f"📅 Сегодняшняя статистика ({username})\n"
+            f"🔹 Переведено: {today_stats[0]}\n"
+            f"🎯 Средняя оценка: {today_stats[1]:.1f}/100\n"
+            f"⏱ Среднее время сессии: {today_stats[2]:.1f} мин\n"
+            f"🚨 Пропущено: {today_stats[3]}\n"
+            f"🏆 Итоговый балл: {today_stats[4]:.1f}\n"
+        )
+    else:
+        today_text = f"📅 **Сегодняшняя статистика ({username})**\n❌ Нет данных (вы ещё не переводили)."
+
+    if weekly_stats:
+        weekly_text = (
+            f"\n📆 Статистика за неделю\n"
+            f"🔹 Переведено: {weekly_stats[1]}\n"
+            f"🎯 Средняя оценка: {weekly_stats[2]:.1f}/100\n"
+            f"⏱ Среднее время сессии: {weekly_stats[3]:.1f} мин\n"
+            f"⏱ Общее время за неделю: {weekly_stats[4]:.1f} мин\n"
+            f"🚨 Пропущено за неделю: {weekly_stats[5]}\n"
+            f"🏆 Итоговый балл: {weekly_stats[6]:.1f}\n"
+        )
+    else:
+        weekly_text = "\n📆 **Статистика за неделю**\n❌ Нет данных."
+
+    await update.message.reply_text(today_text + weekly_text)
+
+
+
+async def send_daily_summary(context: CallbackContext):
+
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 🔹 Собираем активных пользователей (кто перевёл хотя бы одно предложение)
+    cursor.execute("""
+        SELECT DISTINCT user_id, username 
+        FROM translations_deepseek
+        WHERE timestamp::date = CURRENT_DATE;
+    """)
+    active_users = {row[0]: row[1] for row in cursor.fetchall()}
+
+    # 🔹 Собираем всех, кто хоть что-то писал в чат
+    cursor.execute("""
+        SELECT DISTINCT user_id, username
+        FROM messages_deepseek
+        WHERE timestamp >= date_trunc('month', CURRENT_DATE);
+    """)
+    all_users = {row[0]: row[1] for row in cursor.fetchall()}
+    for user_id, username in all_users.items():
+        print(f"User ID from rows: {user_id}, uswername: {username}")
+
+    # 🔹 Собираем статистику за день
+    cursor.execute("""
+       SELECT 
+            ds.user_id, 
+            COUNT(DISTINCT ds.id) AS total_sentences,
+            COUNT(DISTINCT t.id) AS translated,
+            (COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) AS missed,
+            COALESCE(p.avg_time, 0) AS avg_time_minutes, 
+            COALESCE(p.total_time, 0) AS total_time_minutes, 
+            COALESCE(AVG(t.score), 0) AS avg_score,
+            COALESCE(AVG(t.score), 0) 
+            - (COALESCE(p.avg_time, 0) * 2) 
+            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS final_score
+        FROM daily_sentences_deepseek ds
+        LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
+        LEFT JOIN (
+            SELECT user_id, 
+                AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, 
+                SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time
+            FROM user_progress_deepseek
+            WHERE completed = true
+        		AND start_time::date = CURRENT_DATE -- ✅ Теперь только за день
+            GROUP BY user_id
+        ) p ON ds.user_id = p.user_id
+        WHERE ds.date = CURRENT_DATE
+        GROUP BY ds.user_id, p.avg_time, p.total_time
+        ORDER BY final_score DESC;
+    """)
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    # 🔹 Формируем итоговый отчёт
+    if not rows:
+        await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="📊 Сегодня никто не перевёл ни одного предложения!")
+        return
+
+    summary = "📊 Итоги дня:\n\n"
+    medals = ["🥇", "🥈", "🥉"]
+    for i, (user_id, total_sentences, translated, missed, avg_minutes, total_time_minutes, avg_score, final_score) in enumerate(rows):
+        username = all_users.get(int(user_id), 'Неизвестный пользователь')  # ✅ Берём имя пользователя из словаря
+        medal = medals[i] if i < len(medals) else "💩"
+        summary += (
+            f"{medal} {username}\n"
+            f"📜 Всего предложений: {total_sentences}\n"
+            f"✅ Переведено: {translated}\n"
+            f"🚨 Не переведено: {missed}\n"
+            f"⏱ Время среднее: {avg_minutes:.1f} мин\n"
+            f"⏱ Время общее: {total_time_minutes:.1f} мин\n"
+            f"🎯 Средняя оценка: {avg_score:.1f}/100\n"
+            f"🏆 Итоговый балл: {final_score:.1f}\n\n"
+        )
+
+
+    # 🚨 **Добавляем блок про ленивых**
+    lazy_users = {uid: uname for uid, uname in all_users.items() if uid not in active_users}
+    if lazy_users:
+        summary += "\n🦥 Ленивцы (писали в чат, но не переводили):\n"
+        for username in lazy_users.values():
+            summary += f"👤 {username}: ничего не перевёл!\n"
+
+    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text=summary)
+
+
+
+async def send_progress_report(context: CallbackContext):
+    conn = get_db_connection()
+    cursor = conn.cursor()
+
+    # 🔹 Получаем всех пользователей, которые писали в чат **за месяц**
+    cursor.execute("""
+        SELECT DISTINCT user_id, username 
+        FROM messages_deepseek
+        WHERE timestamp >= date_trunc('month', CURRENT_DATE);
+    """)
+    all_users = {int(row[0]): row[1] for row in cursor.fetchall()}
+
+    # 🔹 Получаем всех, кто перевёл хотя бы одно предложение **за сегодня**
+    cursor.execute("""
+        SELECT DISTINCT user_id FROM translations_deepseek WHERE timestamp::date = CURRENT_DATE;
+    """)
+    active_users = {row[0] for row in cursor.fetchall()}
+
+    # 🔹 Собираем статистику по пользователям **за сегодня**(checked)
+    cursor.execute("""
+        SELECT 
+        ds.user_id,
+        COUNT(DISTINCT ds.id) AS всего_предложений,
+        COUNT(DISTINCT t.id) AS переведено,
+        (COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) AS пропущено,
+        COALESCE(p.avg_time, 0) AS среднее_время_сессии_в_минутах, -- ✅ Среднее время за день
+        COALESCE(p.total_time, 0) AS общее_время_за_день, -- ✅ Общее время за день
+        COALESCE(AVG(t.score), 0) AS средняя_оценка,
+        COALESCE(AVG(t.score), 0) 
+            - (COALESCE(p.avg_time, 0) * 2) -- ✅ Используем среднее время в расчётах
+            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS итоговый_балл
+    FROM daily_sentences_deepseek ds
+    LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
+    LEFT JOIN (
+        SELECT user_id, 
+            AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, -- ✅ Среднее время сессии за день
+            SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time -- ✅ Общее время за день
+        FROM user_progress_deepseek
+        WHERE completed = TRUE 
+            AND start_time::date = CURRENT_DATE -- ✅ Теперь только за день
+        GROUP BY user_id
+    ) p ON ds.user_id = p.user_id
+    WHERE ds.date = CURRENT_DATE
+    GROUP BY ds.user_id, p.avg_time, p.total_time
+    ORDER BY итоговый_балл DESC;
+    """)
+    rows = cursor.fetchall()
+
+    cursor.close()
+    conn.close()
+
+    # 🔹 Формируем отчёт
+    if not rows:
+        await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="📊 Сегодня никто не перевёл ни одного предложения!")
+        return
+    current_time = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    progress_report = f"📊 Промежуточные итоги перевода:\n🕒 Время отчёта:\n{current_time}\n\n"
+
+    for user_id, total, translated, missed, avg_minutes, total_minutes, avg_score, final_score in rows:
+        progress_report += (
+            f"👤 {all_users.get(int(user_id), 'Неизвестный пользователь')}\n"
+            f"📜 Переведено: {translated}/{total}\n"
+            f"🚨 Не переведено: {missed}\n"
+            f"⏱ Время среднее: {avg_minutes:.1f} мин\n"
+            f"⏱ Время общ.: {total_minutes:.1f} мин\n"
+            f"🎯 Средняя оценка: {avg_score:.1f}/100\n"
+            f"🏆 Итоговый балл: {final_score:.1f}\n\n"
+        )
+
+    # 🚨 **Добавляем блок про ленивых (учитываем всех, кто писал в чат за месяц)**
+    lazy_users = {uid: uname for uid, uname in all_users.items() if uid not in active_users}
+    if lazy_users:
+        progress_report += "\n🦥 Ленивцы (писали в чат, но не переводили):\n"
+        for username in lazy_users.values():
+            progress_report += f"👤 {username}: ничего не перевёл!\n"
+
+    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text=progress_report)
+
+
+
+
+
+
+def main():
+    global application
+    application = Application.builder().token(TELEGRAM_DeepSeek_BOT_TOKEN).build()
+
+    # 🔹 Добавляем обработчики команд (исправленный порядок)
+
+    # 🔥 Логирование всех сообщений (группа -1, не блокирует цепочку)
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message, block=False), group=-1)
+
+    application.add_handler(CommandHandler("start", start))
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message, block=False), group=1)  # ✅ Сохраняем переводы
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_click, block=False), group=1)  # ✅ Обрабатываем кнопки 
+
+    application.add_handler(CommandHandler("translate", check_user_translation))  # ✅ Проверка переводов
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_translation_from_text, block=False), group=1)  # ✅ Проверяем переводы
+
+
+    application.add_handler(CallbackQueryHandler(topic_selected)) #Он ждет любые нажатия на inline-кнопки.
+    application.add_handler(MessageHandler(filters.TEXT, log_all_messages, block=False), group=2)  # 👈 Добавляем в main()
+
+    
+    scheduler = BackgroundScheduler()
+
+    def run_async_job(async_func, context=None):
+         if context is None:
+             context = CallbackContext(application=application)   # Создаем `context`, если его нет
+
+         try:
+             loop = asyncio.get_running_loop() # ✅ Берем уже работающий event loop
+         except RuntimeError:
+             loop = asyncio.new_event_loop()  # ❌ В потоке `apscheduler` нет loop — создаем новый
+             asyncio.set_event_loop(loop)
+         loop.run_until_complete(async_func(context)) # ✅ Теперь event loop всегда работает
+
+    # ✅ Добавляем задачу в `scheduler` ДЛЯ УТРА
+    print("📌 Добавляем задачу в scheduler...")
+    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=6, minute=30)
+    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=15, minute=1)
+
+    scheduler.add_job(lambda: run_async_job(send_german_news, CallbackContext(application=application)), "cron", hour=6, minute=45)
+    
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=7, minute=7)
+    #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=0, minute=20) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="mon", hour=7, minute=7)
+    
+    scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=23, minute=59)
+    
+    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=22, minute=45)
+    scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=22, minute=55)
+
+    for hour in [9,14,18]:
+        scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
+
+
+    scheduler.start()
+    print("🚀 Бот запущен! Ожидаем сообщения...")
+    application.run_polling()
+
+
+
+
+
+
+if __name__ == "__main__":
+    main()
+
