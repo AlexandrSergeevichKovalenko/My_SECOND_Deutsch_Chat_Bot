@@ -326,7 +326,14 @@ initialise_database()
 
 async def log_all_messages(update: Update, context: CallbackContext):
     """Логируем ВСЕ текстовые сообщения для отладки."""
-    logging.info(f"📩 Бот получил сообщение: {update.message.text}")
+    try:
+        if update.message and update.message.text:
+            logging.info(f"📩 Бот получил сообщение: {update.message.text}")
+        else:
+            logging.warning("⚠️ update.message отсутствует или пустое.")
+    except Exception as e:
+        logging.error(f"❌ Ошибка логирования сообщения: {e}")
+    
 
 
 #Имитация набора текста с typing-индикатором
@@ -1018,13 +1025,14 @@ async def check_translation(original_text, user_translation, update: Update, con
             result_text = f"""
 🟢 *Sentence number*: {escape_markdown(str(sentence_number))}\n
 ✅ *Score:* {escape_markdown(str(score))}/100\n
-🔴 *Mistake Categories:* {escape_markdown(', '.join(categories[:2]) or "No mistakes")}\n
-🔴 *Mistake Subcategory:* {escape_markdown(', '.join(subcategories[:2]) or "No mistakes")}\n
 🔵 *Original Sentence:* {escape_markdown(original_text)}\n
 🟡 *User Translation:* {escape_markdown(user_translation)}\n
 🟣 *Correct Translation:* {escape_markdown(correct_translation)}\n
 📌 *Mistake Severity:* {escape_markdown(str(severity) or "0")}
 """
+
+#🔴 *Mistake Categories:* {escape_markdown(', '.join(categories[:2]) or "No mistakes")}\n
+#🔴 *Mistake Subcategory:* {escape_markdown(', '.join(subcategories[:2]) or "No mistakes")}\n
 
             # ✅ Если балл > 75 → стилистическая ошибка
             if score and score.isdigit() and int(score) > 75:
@@ -1701,8 +1709,9 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
 
         # ✅ Формируем сообщение для пользователя
         recommendations = (
-            f"🧔 *{escape_markdown_v2(username)}, Вы перевели за неделю:* {total_sentences} предложений\n"
-            f"📌 *Переведено с ошибками:* {mistakes_week} предложений\n"
+            f"🧔 *{escape_markdown_v2(username)},\nВы перевели за неделю:* {total_sentences} предложений.\n"
+            f"📌 *В них допущено* {mistakes_week} ошибок.\n"
+            f"🚨 *Количество ошибок на одно предложение:\n* {round(mistakes_week/total_sentences, 2)} штук.\n"
             f"🔴 *Больше всего ошибок* {number_of_top_category_mistakes} *в категории*:\n {escape_markdown(top_mistake_category) or 'неизвестно'}\n"
         )
         if top_mistake_subcategory_1:
@@ -2098,6 +2107,12 @@ async def send_progress_report(context: CallbackContext):
 
 
 
+async def error_handler(update, context):
+    logging.error(f"❌ Ошибка в обработчике Telegram: {context.error}")
+
+
+
+
 def main():
     global application
     application = Application.builder().token(TELEGRAM_DeepSeek_BOT_TOKEN).build()
@@ -2118,7 +2133,8 @@ def main():
     application.add_handler(CallbackQueryHandler(topic_selected)) #Он ждет любые нажатия на inline-кнопки.
     application.add_handler(MessageHandler(filters.TEXT, log_all_messages, block=False), group=2)  # 👈 Добавляем в main()
 
-    
+    application.add_error_handler(error_handler)
+
     scheduler = BackgroundScheduler()
 
     def run_async_job(async_func, context=None):
