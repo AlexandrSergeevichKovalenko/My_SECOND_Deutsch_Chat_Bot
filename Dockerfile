@@ -26,5 +26,7 @@ ENV DATABASE_URL_RAILWAY=""
 ENV TELEGRAM_DeepSeek_BOT_TOKEN=""
 ENV CLAUDE_API_KEY=""
 
+# ✅ Связываем DATABASE_URL_RAILWAY с DATABASE_URL (чтобы код читал переменную правильно)
+ENV DATABASE_URL=$DATABASE_URL_RAILWAY
 
 CMD ["python", "deepseek_bot_copy.py"]

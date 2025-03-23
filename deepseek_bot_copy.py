@@ -21,8 +21,6 @@ import aiohttp
 from telegram.ext import CallbackContext
 import aiohttp
 from googleapiclient.discovery import build
-#import anthropic
-#from anthropic import AsyncAnthropic
 from telegram.error import TelegramError
 from telegram.helpers import escape_markdown
 import anthropic
