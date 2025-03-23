@@ -24,6 +24,7 @@ ENV OPENAI_API_KEY=""
 ENV API_KEY_NEWS=""
 ENV DATABASE_URL_RAILWAY=""
 ENV TELEGRAM_DeepSeek_BOT_TOKEN=""
+ENV CLAUDE_API_KEY=""
 
 
 CMD ["python", "deepseek_bot_copy.py"]
