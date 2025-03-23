@@ -1,4 +1,5 @@
 # Этот бот может работать с DEEPSEEK
+# Полностью рабочий код Только не поддерживает Topic А нужно убрать их и работать в одной общей группе
 import os
 import logging
 import openai
@@ -18,31 +19,33 @@ import re
 import requests
 import aiohttp
 from telegram.ext import CallbackContext
-from telegram.helpers import escape_markdown
 import aiohttp
 from googleapiclient.discovery import build
 #import anthropic
 #from anthropic import AsyncAnthropic
 from telegram.error import TelegramError
 from telegram.helpers import escape_markdown
+import anthropic
+from anthropic import AsyncAnthropic
+
 
 application = None
 
 
 # Buttons in Telegramm
 TOPICS = ["Business", "Medicine", "Hobbies", "Free Time", "Education",
-    "Work", "Travel", "Science", "Technology", "Everyday Life", "Random sentences"]
+    "Work", "Travel", "Science", "Technology", "Everyday Life", "Random sentences", "News"]
 
 
 # Получи ключ на https://console.cloud.google.com/apis/credentials
 YOUTUBE_API_KEY = os.getenv("YOUTUBE_API_KEY")
 
-# # Ваш API-ключ для CLAUDE 3.7
-# CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
-# if CLAUDE_API_KEY:
-#     logging.info("✅ CLAUDE_API_KEY успешно загружен!")
-# else:   
-#     logging.error("❌ Ошибка: CLAUDE_API_KEY не задан. Проверь переменные окружения!")
+# Ваш API-ключ для CLAUDE 3.7
+CLAUDE_API_KEY = os.getenv("CLAUDE_API_KEY")
+if CLAUDE_API_KEY:
+    logging.info("✅ CLAUDE_API_KEY успешно загружен!")
+else:   
+    logging.error("❌ Ошибка: CLAUDE_API_KEY не задан. Проверь переменные окружения!")
 
 # Ваш API-ключ для mediastack
 API_KEY_NEWS = os.getenv("API_KEY_NEWS")
@@ -311,6 +314,7 @@ def initialise_database():
                         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время первой фиксации ошибки
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время последнего появления ошибки
                         error_count_week INT DEFAULT 0, -- Количество ошибок за последнюю неделю
+                        sentence_id INT,
 
                         -- ✅ Уникальный ключ для предотвращения дубликатов
                         CONSTRAINT for_mistakes_table UNIQUE (user_id, sentence, main_category, sub_category)
@@ -363,6 +367,7 @@ async def send_main_menu(update: Update, context: CallbackContext):
 
 async def debug_message_handler(update: Update, context: CallbackContext):
     print(f"🔹 Получено сообщение (DEBUG): {update.message.text}")
+
 
 async def handle_button_click(update: Update, context: CallbackContext):
     """Обрабатывает нажатия на кнопки главного меню."""
@@ -664,7 +669,7 @@ async def handle_user_message(update: Update, context: CallbackContext):
     text = update.message.text.strip()
 
     # Проверяем, является ли сообщение переводом (поддержка многострочных сообщений)
-    pattern = re.compile(r"(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)")
+    pattern = re.compile(r"^(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)", re.MULTILINE)
     translations = pattern.findall(text)
 
     if translations:
@@ -809,11 +814,15 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
 
     if chosen_topic != "Random sentences":
         prompt = f"""
-        Придумай {num_sentances} связанных предложений уровня B2-C1 на тему "{chosen_topic}" на **русском языке** для перевода на **немецкий**.
+        Придумай {num_sentances} связанных предложений уровня B2 на тему "{chosen_topic}" на **русском языке** для перевода на **немецкий**.
 
         **Требования:**
         - Свяжи предложения в одну логичную историю.
-        - Используй **пассивный залог** и **Konjunktiv II** В 30% предложений.
+        - Используй **пассивный залог** и **Konjunktiv II** хотя бы в одном предложении.
+        - Тематики: **глагол "lassen"**, **Futur II**, **субъективное значение модальных глаголов**, **пассивный залог во всех временах и альтернативные конструкции**, **существительные с управлением**, **неопределённые местоимения**, **прилагательные с управлением**, **модальные частицы**, **порядок слов в предложениях с обстоятельствами времени, причины, образа действия, места**, **все типы придаточных предложений**.
+        - Используй **Konjunktiv I** для выражения косвенной речи.
+        - Включай **двойные союзы** (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl ...als auch, weder...noch, je...desto).
+        - Добавляй **устойчивые глагольно-именные словосочетания** (например, привести к успеху, принять участие, оказать помощь, произвести впечатление, осуществить контроль, совершить ошибку, иметь значение, принять во внимание).
         - Каждое предложение должно быть **на отдельной строке**.
         - **НЕ добавляй перевод!** Только оригинальные русские предложения.
         - Предложения должны содержать часто употребительную в повседневной жизни лексику и грамматику.
@@ -830,7 +839,11 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
         Придумай {num_sentances} предложений уровня B2-C1 на **русском языке** для перевода на **немецкий**.
             
         **Требования:**
-        - Используй **пассивный залог** и **Konjunktiv II** В 30% предложений.
+        - Используй **пассивный залог** и **Konjunktiv II** хотя бы в одном предложении.
+        - Тематики: **глагол "lassen"**, **Futur II**, **субъективное значение модальных глаголов**, **пассивный залог во всех временах и альтернативные конструкции**, **существительные с управлением**, **неопределённые местоимения**, **прилагательные с управлением**, **модальные частицы**, **порядок слов в предложениях с обстоятельствами времени, причины, образа действия, места**, **все типы придаточных предложений**.
+        - Используй **Konjunktiv I** для выражения косвенной речи.
+        - Включай **двойные союзы** (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl ...als auch, weder...noch, je...desto).
+        - Добавляй **устойчивые глагольно-именные словосочетания** (например, привести к успеху, принять участие, оказать помощь, произвести впечатление, осуществить контроль, совершить ошибку, иметь значение, принять во внимание).
         - Каждое предложение должно быть **на отдельной строке**.
         - **НЕ добавляй перевод!** Только оригинальные русские предложения.
         - Предложения должны содержать часто употребительную в повседневной жизни лексику(бизнес медицина, Хобби, Свободное время, Учёба, Работа, Путешествия) и грамматику.
@@ -900,9 +913,6 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
         print("❌ Ошибка: даже запасные предложения отсутствуют.")
         return ["Запасное предложение 1", "Запасное предложение 2"]
 
-
-
-from telegram.helpers import escape_markdown
 
 async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
     client = openai.AsyncOpenAI(api_key=openai.api_key)
@@ -1027,13 +1037,22 @@ async def check_translation(original_text, user_translation, update: Update, con
 
             # ✅ Убираем лишние пробелы для ровного форматирования
             result_text = f"""
-🟢 *Sentence number*: {escape_markdown(str(sentence_number))}\n
-✅ *Score:* {escape_markdown(str(score))}/100\n
-🔵 *Original Sentence:* {escape_markdown(original_text)}\n
-🟡 *User Translation:* {escape_markdown(user_translation)}\n
-🟣 *Correct Translation:* {escape_markdown(correct_translation)}\n
-📌 *Mistake Severity:* {escape_markdown(str(severity) or "0")}
+🟢 Sentence number: {str(sentence_number)}\n
+✅ Score: {str(score)}/100\n
+🔵 Original Sentence: {escape_markdown(original_text)}\n
+🟡 User Translation: {escape_markdown(user_translation)}\n
+🟣 Correct Translation: {escape_markdown(correct_translation)}\n
+📌 Mistake Severity: {str(severity) or "0"}
 """
+#             # ✅ Убираем лишние пробелы для ровного форматирования
+#             result_text = f"""
+# 🟢 *Sentence number*: {escape_markdown(str(sentence_number))}\n
+# ✅ *Score:* {escape_markdown(str(score))}/100\n
+# 🔵 *Original Sentence:* {escape_markdown(original_text)}\n
+# 🟡 *User Translation:* {escape_markdown(user_translation)}\n
+# 🟣 *Correct Translation:* {escape_markdown(correct_translation)}\n
+# 📌 *Mistake Severity:* {escape_markdown(str(severity) or "0")}
+# """
 
 #🔴 *Mistake Categories:* {escape_markdown(', '.join(categories[:2]) or "No mistakes")}\n
 #🔴 *Mistake Subcategory:* {escape_markdown(', '.join(subcategories[:2]) or "No mistakes")}\n
@@ -1043,14 +1062,34 @@ async def check_translation(original_text, user_translation, update: Update, con
                 result_text += "\n✅ Перевод на высоком уровне — считаем это незначительной ошибкой."
 
             # ✅ Отправляем текст в Telegram с поддержкой Markdown
-            await context.bot.send_message(
+            sent_message = await context.bot.send_message(
                 chat_id=update.message.chat_id,
                 text=result_text,
-                parse_mode="Markdown"
+                parse_mode=None
             )
+
+            message_id = sent_message.message_id
+            
+            # ✅ Сохраняем данные в context.user_data
+            if len(context.user_data) >= 10:
+                oldest_key = next(iter(context.user_data))
+                del context.user_data[oldest_key]  # Удаляем самые старые данные
+
+            context.user_data[f"translation_{message_id}"] = {
+                "original_text": original_text,
+                "user_translation": user_translation
+            }
 
             # ✅ Удаляем сообщение с индикатором "Генерация ответа"
             await message.delete()
+
+            # ✅ Добавляем инлайн-кнопку после отправки сообщения
+            keyboard = [[InlineKeyboardButton("❓ Explain me with Claude", callback_data=f"explain:{message_id}")]]
+            reply_markup = InlineKeyboardMarkup(keyboard)
+
+
+            # ✅ Редактируем сообщение, добавляем кнопку
+            await sent_message.edit_text(result_text, reply_markup=reply_markup)                        
 
             # ✅ Логируем успешную проверку
             logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
@@ -1076,80 +1115,237 @@ async def check_translation(original_text, user_translation, update: Update, con
             print(f"❌ Непредвиденная ошибка в цикле обработки GPT: {e}")
             logging.error(f"❌ Непредвиденная ошибка: {e}")
             
-    # # ✅ Если три попытки провалились — пробуем Claude
-    # print(f"⚠️ GPT не справился — пробуем Claude...")
-    # return await check_translation_with_claude(original_text, user_translation, update, context)
+
+
+async def handle_explain_request(update: Update, context: CallbackContext):
+    query = update.callback_query
+    await query.answer()  # Подтверждаем получение запроса
+
+    # ✅ Логируем факт вызова функции
+    logging.info("🔹 handle_explain_request вызвана!")
+
+    try:
+        logging.info(f"🔹 Callback data: {query.data}")
+
+        # ✅ Получаем `message_id` из callback_data
+        message_id = int(query.data.split(":")[1])
+        logging.info(f"✅ Извлечённый message_id: {message_id}")
+        
+        # Логируем сообщение, к которому пытаемся прикрепить комментарий
+        chat_id = update.callback_query.message.chat_id
+
+        # ✅ Логируем статус бота в чате
+        member = await context.bot.get_chat_member(
+            chat_id=chat_id,
+            user_id=context.bot.id
+        )
+        if member.status in ['administrator', 'creator']:
+            can_send_messages = True
+        elif hasattr(member, 'can_send_messages'):
+            can_send_messages = member.can_send_messages
+        else:
+            can_send_messages = False
+
+        print(f"👮 Bot status: {member.status}, can_send_messages: {can_send_messages}")
+        if not can_send_messages:
+            logging.error("❌ Бот не имеет прав отправлять сообщения в этот чат!")
+            await query.message.reply_text("❌ У бота нет прав отправлять сообщения в этот чат!")
+            return
+
+
+        #✅ Ищем в сохранённых данных
+        data = context.user_data.get(f"translation_{message_id}")
+        if not data:
+            logging.error(f"❌ Данные для message_id {message_id} не найдены в context.user_data!")
+            await query.message.reply_text("❌ Данные перевода не найдены!")
+            return       
+
+        # ✅ Получаем текст оригинала и перевода
+        original_text = data["original_text"]
+        user_translation = data["user_translation"]
+        # ✅ Запускаем объяснение с помощью Claude
+        explanation = await check_translation_with_claude(original_text, user_translation, update, context)
+        if not explanation:
+            logging.error("❌ Не удалось получить объяснение от Claude!")
+            await query.message.reply_text("❌ Не удалось получить объяснение!")
+            return          
+      
+        # ✅ Логируем попытку отправки комментария
+        print(f"📩 Sending reply to message with message_id: {message_id} in chat ID: {chat_id}")
+
+
+        # ✅ Отправляем ответ как комментарий к сообщению
+        await context.bot.send_message(
+            chat_id=chat_id,
+            text=explanation,
+            parse_mode="Markdown",
+            reply_to_message_id=message_id  # 🔥 ПРИКРЕПЛЯЕМСЯ К СООБЩЕНИЮ
+            )
+        
+        # ✅ Удаляем данные после успешной обработки
+        del context.user_data[f"translation_{message_id}"]
+        print(f"✅ Удалены данные для message_id {message_id}")
+
+    except TelegramError as e:
+            if 'message to reply not found' in str(e).lower():
+                print(f"⚠️ Message ID {message_id} not found — возможно, сообщение удалено!")
+                await query.message.reply_text("❌ Сообщение не найдено, возможно, оно было удалено!")
+            else:
+                logging.error(f"❌ Telegram Error: {e}")
+                await query.message.reply_text(f"❌ Ошибка Telegram: {e}")
+    except Exception as e:
+        logging.error(f"❌ Ошибка в handle_explain_request: {e}")
+        await query.message.reply_text(f"❌ Произошла ошибка: {e}. Попробуйте повторить запрос.")
 
 
 
-# ✅ Fallback на Claude
-# async def check_translation_with_claude(original_text, user_translation, update, context):
-#     client = anthropic.AsyncAnthropic(api_key=CLAUDE_API_KEY)
 
-#     prompt = f"""
-#     You are an expert German language teacher. Analyze the student's translation.
+#✅ Explain with Claude
+async def check_translation_with_claude(original_text, user_translation, update, context):
+    if update.callback_query:
+        user = update.callback_query.from_user
+        chat_id = update.callback_query.message.chat_id
+    else:
+        logging.error("❌ Нет callback_query в update!")
+        return None, None
+    client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
 
-#     **Original sentence (Russian):** "{original_text}"
-#     **User's translation (German):** "{user_translation}"
+    prompt = f"""
+    You are an expert in Russian and German languages, a professional translator, and a German grammar instructor.
+    Your task is to analyze the student's translation from Russian to German and provide detailed feedback according to the following criteria:
+    ❗ Do NOT repeat the original text or the translation in your response — only provide conclusions and explanations.
+    Analysis Criteria:
+    1. Errors:
 
-#     **Your task:**
-#     1. **Give a score from 0 to 100** based on the original content, correct vocabulary usage, grammatical accuracy (this is the most important criterion when grading), and style. If the content is completely inaccurate, the score is zero.  
+    - Identify the key errors in the translation and classify them into the following categories:
+        - Grammar (nouns, cases, verbs, tenses, prepositions, etc.)
+        - Vocabulary (incorrect word choice, false friends, etc.)
+        - Style (formal/informal register, clarity, tone, etc.)
+    
+    - Grammar Explanation:
+        - Explain why the grammatical structure in the phrase is incorrect.
+        - Provide a corrected version of the structure.
+        - If the error is related to verb usage or prepositions, specify the correct form and usage.
+        
+    - Alternative Sentence Construction:
+        - Suggest one alternative construction of the sentence.
+        - Explain how the alternative differs in tone, formality, or meaning.
+   
+    - Synonyms:
+        - Suggest possible synonyms for incorrect or less appropriate words.
+        - Provide no more than two alternatives.
+    ----------------------
+    **Response Format**:
+    **The response must follow this strict structured format**:
+    Error 1: (Grammatical or lexical or stylistic error)
+    Error 2: (Grammatical or lexical or stylistic error)
+    Correct Translation: …
+    Grammar Explanation:
+    Alternative Sentence Construction:(just a Alternative Sentence Construction without explanation)
+    Synonyms:
+    Original Word: …
+    Possible Synonyms: … (no more than two)
+    
+    -------------------
+    🔎 Important Instructions:
 
-#     2. **Identify all mistake categories** (you may select multiple categories if needed, but only from enumeration below):  
-#     - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
+    Follow the specified format strictly.
+    Provide objective and constructive feedback.
+    Do NOT add introductory phrases (e.g., "Here’s what I think...").
+    The response should be clear and concise.
 
-#     3. **Identify all specific mistake subcategories** (you may select multiple subcategories if needed, but only from enumeration below):  
-#     - **Nouns:** Gendered Articles, Pluralization, Compound Nouns, Declension Errors  
-#     - **Cases:** Nominative, Accusative, Dative, Genitive, Akkusativ + Preposition, Dative + Preposition, Genitive + Preposition  
-#     - **Verbs:** Placement, Conjugation, Weak Verbs, Strong Verbs, Mixed Verbs, Separable Verbs, Reflexive Verbs, Auxiliary Verbs, Modal Verbs, Verb Placement in Subordinate Clause  
-#     - **Tenses:** Present, Past, Simple Past, Present Perfect, Past Perfect, Future, Future 1, Future 2, Plusquamperfekt Passive, Futur 1 Passive, Futur 2 Passive  
-#     - **Adjectives:** Endings, Weak Declension, Strong Declension, Mixed Declension, Placement, Comparative, Superlative, Incorrect Adjective Case Agreement  
-#     - **Adverbs:** Placement, Multiple Adverbs, Incorrect Adverb Usage  
-#     - **Conjunctions:** Coordinating, Subordinating, Incorrect Use of Conjunctions  
-#     - **Prepositions:** Accusative, Dative, Genitive, Two-way, Incorrect Preposition Usage  
-#     - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
-#     - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
+    Below you can find:
+    **Original sentence (Russian):** "{original_text}"
+    **User's translation (German):** "{user_translation}"
 
-#     4. **Provide a severity level from 1 to 5** where:  
-#     - 1 = Minor stylistic error  
-#     - 2 = Common mistake  
-#     - 3 = Noticeable grammatical issue  
-#     - 4 = Severe grammatical mistake  
-#     - 5 = Critical mistake that changes the meaning  
+    """
+    #available_models = await client.models.list()
+    # logging.info(f"📢 Available models: {available_models}")
+    # print(f"📢 Available models: {available_models}")
+    
+    model_name = "claude-3-7-sonnet-20250219"  
+    
+    for attempt in range(3):
+        try:
+            response = await client.messages.create(
+                model=model_name,
+                messages=[{"role": "user", "content": prompt}],
+                max_tokens=500,
+                temperature=0.2
+            )
+            
+            logging.info(f"📥 FULL RESPONSE BODY: {response}")
 
-#     5. **List all identified mistakes** → if there are multiple mistakes, return them as a list.  
+            if response:
+                cloud_response = response.content[0].text
+                break
+            else:
+                logging.warning("⚠️ Claude returned an empty response.")
+                print("❌ Ошибка: Claude вернул пустой ответ. We will try one more time in 5 seconds")
+                await asyncio.sleep(5)
+        
+        except anthropic.APIError as e:
+            logging.error(f"❌ API Error from Claude: {e}")
+            # Если ошибка действительно критическая — можно добавить проверку и выйти из цикла
+            if "authentication" in str(e).lower() or "invalid token" in str(e).lower():
+                logging.error("🚨 Критическая ошибка — завершаем цикл")
+                break
+            else:
+                logging.warning("⚠️ Попробуем снова через 5 секунд...")
+                await asyncio.sleep(5)
 
-#     6. **Provide the correct translation.**  
+    else:
+        print("❌ Ошибка: Пустой ответ от Claude после 3 попыток")
+        return "❌ Ошибка: Не удалось обработать ответ от Claude."
+    
+    list_of_errors_pattern = re.findall(r'(Error)\s*(\d+)\:*\s*(.+?)(?:\n|$)', cloud_response, flags=re.DOTALL)
+    correct_translation = re.findall(r'(Correct Translation)\:\s*(.+?)(?:\n|$)', cloud_response, flags=re.DOTALL)
+    grammar_explanation_pattern = re.findall(r'(Grammar Explanation)\s*\:*\n(.+?)(?=Alternative Sentence Construction|Synonyms|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
+    altern_sentence_pattern = re.findall(r'(Alternative Construction|Alternative Sentence Construction)\:*\s*(.+?)(?=Synonyms|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
+    synonyms_pattern = re.findall(r'Synonyms\:*\n(.+)(?=\n[A-Z][a-zA-Z\s]+:|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
 
-#     ---
+    if not list_of_errors_pattern and not correct_translation:
+        logging.error("❌ Claude вернул некорректный формат ответа!")
+        return "❌ Ошибка: Не удалось обработать ответ от Claude."
+    
+    # Собираем результат в список
+    result_list = []
 
-#     **Format your response strictly as follows (without extra words):**  
-#     Score: X/100  
-#     Mistake Categories: ... (comma separated)  
-#     Subcategories: ... (comma separated)  
-#     Severity: ...  
-#     Correct Translation: ...  
-#     """
+    # Добавляем ошибки
+    for line in list_of_errors_pattern:
+        result_list.append(f"**{line[0]} {line[1]}:** {line[2]}")
 
-#     try:
-#         response = await client.messages.create(
-#             model="claude-3-7-sonnet-20250219",
-#             messages=[{"role": "user", "content": prompt}],
-#             max_tokens=500,
-#             temperature=0.2
-#         )
+    # Добавляем корректный перевод
+    for item in correct_translation:
+        result_list.append(f"**{item[0]}:** {item[1]}")
 
-#         if response and hasattr(response, "content"):
-#             return response.content.strip()
-#         else:
-#             logging.warning("⚠️ Claude returned an empty response.")
-#             return "❌ Ошибка: Claude вернул пустой ответ"
-#     except Exception as e:
-#         logging.error(f"❌ Ошибка при проверке перевода в Claude: {e}")
-#         await context.bot.send_message(
-#             chat_id=update.message.chat_id,
-#             text="❌ Произошла ошибка при проверке перевода. Попробуйте позже."
-#     )
+    # Добавляем объяснения грамматики
+    for k in grammar_explanation_pattern:
+        result_list.append(f"**{k[0]}:**")  # Добавляем заголовок
+        grammar_parts = k[1].split("\n")  # Разбиваем текст по строкам
+        for part in grammar_parts:
+            clean_part = part.strip()
+            if clean_part and clean_part not in ["-", ":"]:
+                result_list.append(clean_part)
+
+    # Добавляем альтернативные варианты
+    for a in altern_sentence_pattern:
+        result_list.append(f"**{a[0]}:** {a[1].strip()}")  # Убираем лишние пробелы
+
+    # Добавляем синонимы
+    if synonyms_pattern:
+        result_list.append("Synonyms:")
+        for s in synonyms_pattern:
+            synonym_parts = s.split("\n")
+            for part in synonym_parts:
+                clean_part = part.strip()
+                if clean_part:
+                    result_list.append(f"{clean_part}")
+
+    # результат
+    result_line_for_output = "\n".join(result_list)
+
+    return result_line_for_output
 
 
 
@@ -1227,33 +1423,44 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
 
 
         # ✅ Запись в базу данных
-        conn = get_db_connection()
-        cursor = conn.cursor()
+        with get_db_connection() as conn:
+            with conn.cursor() as cursor:
+                try:
+                    # ✅ Получаем sentence_id
+                    cursor.execute("""
+                    SELECT id FROM daily_sentences_deepseek
+                    WHERE sentence=%s;
+                """, (original_text, )
+                    )
 
-        try:
-            cursor.execute("""
-                INSERT INTO detailed_mistakes_deepseek (
-                    user_id, sentence, added_data, main_category, sub_category, severity, mistake_count
-                ) VALUES (%s, %s, NOW(), %s, %s, %s, 1)
-                ON CONFLICT (user_id, sentence, main_category, sub_category)
-                DO UPDATE SET
-                    mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
-                    last_seen = NOW();
-            """, (user_id, original_text, main_category, sub_category, severity))
-            conn.commit()
-            
-            print(f"✅ Ошибка '{main_category} - {sub_category}' успешно записана в базу.")
-        
-        except Exception as e:
-            print(f"❌ Ошибка при записи в БД: {e}")
-        
-        finally:
-            cursor.close()
-            conn.close()
+                    result = cursor.fetchone()
+                    sentence_id = result[0] if result else None
+
+                    if sentence_id:
+                        logging.info(f"✅ sentence_id для предложения '{original_text}': {sentence_id}")
+                    else:
+                        logging.warning(f"⚠️ sentence_id не найдено для предложения '{original_text}'")
+                    
+                    # ✅ Вставляем данные в базу
+                    cursor.execute("""
+                        INSERT INTO detailed_mistakes_deepseek (
+                            user_id, sentence, added_data, main_category, sub_category, severity, mistake_count, sentence_id
+                        ) VALUES (%s, %s, NOW(), %s, %s, %s, 1, %s)
+                        ON CONFLICT (user_id, sentence, main_category, sub_category)
+                        DO UPDATE SET
+                            mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
+                            last_seen = NOW();
+                    """, (user_id, original_text, main_category, sub_category, severity, sentence_id))
+                    
+                    conn.commit()
+                    print(f"✅ Ошибка '{main_category} - {sub_category}' успешно записана в базу.")
+                
+                except Exception as e:
+                    print(f"❌ Ошибка при записи в БД: {e}")
+                    logging.error(f"❌ Ошибка при записи в БД: {e}")
 
     # ✅ Логирование успешного завершения обработки
     print(f"✅ Все ошибки успешно обработаны!")
-
 
 
 async def check_user_translation(update: Update, context: CallbackContext, translation_text=None):
@@ -1271,7 +1478,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
     # translation_text = message_text.replace("/translate", "").strip()
 
     # Разбираем входной текст на номера предложений и переводы
-    pattern = re.compile(r"(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)")
+    pattern = re.compile(r"(\d+)\.\s*([^\d\n]+(?:\n[^\d\n]+)*)", re.MULTILINE)
     translations = pattern.findall(translation_text)
     
     print(f"✅ Извлечено {len(translations)} переводов: {translations}")
@@ -1361,6 +1568,31 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             conn.commit()
 
+            #deleting sentences from detailed_mistakes_deepseek if score is 90 or more
+            if score >= 90 and sentence_id:
+                try:
+                    # ✅ Проверяем, существует ли предложение с таким sentence_id
+                    cursor.execute("""
+                        SELECT COUNT(*) FROM detailed_mistakes_deepseek
+                        WHERE sentence_id = %s;
+                    """, (sentence_id, ))
+
+                    result = cursor.fetchone()
+                    if result and result[0] > 0:
+                        logging.info(f"✅ Удаляем предложение с sentence_id = {sentence_id}, так как балл выше 90.")
+                        # ✅ Удаляем все ошибки, связанные с данным предложением
+                        cursor.execute("""
+                            DELETE FROM detailed_mistakes_deepseek
+                            WHERE sentence_id = %s;
+                            """, (sentence_id, ))
+                        conn.commit()
+                        logging.info(f"✅ Предложение с sentence_id = {sentence_id} успешно удалено.")
+                    else:
+                        logging.warning(f"⚠️ Предложение с sentence_id = {sentence_id} не найдено в базе.")
+                except Exception as e:
+                    logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {sentence_id}: {e}")
+
+
             if score == 100:
                 print(f"✅ Перевод выполнен идеально ({score}/100) — пропускаем запись в базу данных.")
                 continue
@@ -1391,31 +1623,49 @@ async def get_original_sentences(user_id, context: CallbackContext):
     try:
     
         # Выполняем SQL-запрос: выбираем 2 случайных предложений из базы данных в которую мы предварительно поместили предложение
-        cursor.execute("SELECT sentence FROM sentences_deepseek ORDER BY RANDOM() LIMIT 2;")
+        cursor.execute("SELECT sentence FROM sentences_deepseek ORDER BY RANDOM() LIMIT 1;")
         rows = [row[0] for row in cursor.fetchall()]   # Возвращаем список предложений
         print(f"📌 Найдено в базе данных: {rows}") # ✅ Логируем результат
-        
 
+        # ✅ Загружаем все предложения из базы ошибок
         cursor.execute("""
-            SELECT sentence FROM detailed_mistakes_deepseek
+            SELECT sentence, sentence_id
+            FROM detailed_mistakes_deepseek
             WHERE user_id = %s
-            ORDER BY mistake_count DESC, last_seen ASC
-            LIMIT 5; 
+            ORDER BY mistake_count DESC, last_seen ASC; 
         """, (user_id, ))
-        mistake_sentences = [row[0] for row in cursor.fetchall()]
-        print(f"⚠️ Предложения из ошибок: {mistake_sentences}") # ✅ Логируем результат
+        
+        # ✅ Используем set() для удаления дубликатов по sentence_id
+        already_given_sentence_ids = set()
+        unique_sentences = set()
+        mistake_sentences = []
+
+        for sentence, sentence_id in cursor.fetchall():
+            if sentence_id and sentence_id not in already_given_sentence_ids:
+                if sentence_id not in unique_sentences:
+                    unique_sentences.add(sentence_id)
+                    mistake_sentences.append(sentence)
+                    already_given_sentence_ids.add(sentence_id)
+
+                    # ✅ Ограничиваем до нужного количества предложений (например, 6)
+                    if len(mistake_sentences) == 5:
+                        break
+
+
+        print(f"✅ Уникальные предложения из базы ошибок: {len(mistake_sentences)} / 5")
 
         # 🔹 3. Определяем, сколько предложений не хватает до 7
         num_sentences = 7 - len(rows) - len(mistake_sentences)
-        print(f"📌 Найдено: {len(rows)} в базе данных + {len(mistake_sentences)} повторение ошибок. Генерируем ещё {num_sentences} предложений.")
 
+        print(f"📌 Найдено: {len(rows)} в базе данных + {len(mistake_sentences)} повторение ошибок. Генерируем ещё {num_sentences} предложений.")
+        gpt_sentences = []
+        
         # 📌 3. Остальные предложений генерируем через GPT
-        print("⚠️ Генерируем дополнительные предложения через GPT-4...")
         if num_sentences > 0:
-            gpt_sentences = await generate_sentences(user_id, num_sentences, context)  # Если предложений нет — вызываем GPT-4
-            print(f"🚀 Сгенерированные GPT предложения: {gpt_sentences}") # ✅ Логируем результат
-        else:
-            gpt_sentences = []
+            print("⚠️ Генерируем дополнительные предложения через GPT-4...")
+            gpt_sentences = await generate_sentences(user_id, num_sentences, context)
+            #print(f"🚀 Сгенерированные GPT предложения: {gpt_sentences}") # ✅ Логируем результат
+            
         
         # ✅ Проверяем финальный список предложений
         final_sentences = rows + mistake_sentences + gpt_sentences
@@ -1425,11 +1675,13 @@ async def get_original_sentences(user_id, context: CallbackContext):
             print("❌ Ошибка: Не удалось получить предложения!")
             return []  # Вернём пустой список в случае ошибки
         
-        return rows + mistake_sentences + gpt_sentences
+        return final_sentences
     
     finally: # Закрываем курсор и соединение **в конце**, независимо от того, какая ветка выполнялась
         cursor.close()
         conn.close()
+
+
 
 # Указываем ID нужных каналов
 PREFERRED_CHANNELS = [
@@ -2129,6 +2381,7 @@ def main():
     application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message, block=False), group=1)  # ✅ Сохраняем переводы
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_click, block=False), group=1)  # ✅ Обрабатываем кнопки 
+    application.add_handler(CallbackQueryHandler(handle_explain_request, pattern=r"^explain:"))
 
     application.add_handler(CommandHandler("translate", check_user_translation))  # ✅ Проверка переводов
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, check_translation_from_text, block=False), group=1)  # ✅ Проверяем переводы
