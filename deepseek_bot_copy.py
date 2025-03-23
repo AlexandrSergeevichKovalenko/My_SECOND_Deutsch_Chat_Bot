@@ -214,7 +214,8 @@ def initialise_database():
                         sentence TEXT NOT NULL,
                         unique_id INT NOT NULL,
                         user_id BIGINT,
-                        session_id BIGINT
+                        session_id BIGINT,
+                        id_for_mistake_table INT
                 );
             """)
 
@@ -619,13 +620,37 @@ async def letsgo(update: Update, context: CallbackContext):
 
     # Записываем bсе предложения в базу
     tasks = []
-    for i, sentence in enumerate(sentences, start=last_index + 1):
-        cursor.execute("""
-            INSERT INTO daily_sentences_deepseek (date, sentence, unique_id, user_id, session_id)
-            VALUES (CURRENT_DATE, %s, %s, %s, %s);
-        """, (sentence, i, user_id, session_id))
-        tasks.append(f"{i}. {sentence}")
 
+    for i, sentence in enumerate(sentences, start=last_index+1):
+        # ✅ Проверяем, есть ли уже предложение с таким текстом
+        cursor.execute("""
+            SELECT id_for_mistake_table
+            FROM daily_sentences_deepseek
+            WHERE sentence = %s
+            LIMIT 1;
+        """, (sentence, ))
+        result = cursor.fetchone()
+
+        if result:
+            id_for_mistake_table = result[0]
+            logging.info(f"✅ Найден существующий id_for_mistake_table = {id_for_mistake_table} для текста: '{sentence}'")
+        else:
+            # ✅ Если текста нет — получаем максимальный ID и создаём новый
+            cursor.execute("""
+                SELECT MAX(id_for_mistake_table) FROM daily_sentences_deepseek;
+            """)
+            result = cursor.fetchone()
+            max_id = result[0] if result and result[0] is not None else 0
+            id_for_mistake_table = max_id + 1
+            logging.info(f"✅ Присваиваем новый id_for_mistake_table = {id_for_mistake_table} для текста: '{sentence}'")
+
+        # ✅ Вставляем предложение в таблицу с id_for_mistake_table
+        cursor.execute("""
+            INSERT INTO daily_sentences_deepseek (date, sentence, unique_id, user_id, session_id, id_for_mistake_table)
+            VALUES (CURRENT_DATE, %s, %s, %s, %s, %s);
+        """, (sentence, i, user_id, session_id, id_for_mistake_table))
+        
+        tasks.append(f"{i}. {sentence}")
 
     conn.commit()
     cursor.close()
@@ -1424,13 +1449,16 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
         with get_db_connection() as conn:
             with conn.cursor() as cursor:
                 try:
-                    # ✅ Получаем sentence_id
+                    # ✅ Получаем id_for_mistake_table
                     cursor.execute("""
-                    SELECT id FROM daily_sentences_deepseek
-                    WHERE sentence=%s;
+                    SELECT id_for_mistake_table 
+                    FROM daily_sentences_deepseek
+                    WHERE sentence=%s
+                    LIMIT 1;
                 """, (original_text, )
                     )
-
+                    #sentence_id В нашем случае это идентификатор id_for_mistake_table Из таблицы daily_sentences_deepseek (для одинаковых предложений он одинаков) Для разных он разный.
+                    # это нужно чтобы правильно Помечать предложения особенно одинаковые предложения и потом их правильно удалять из базы данных на основании этого идентификатора
                     result = cursor.fetchone()
                     sentence_id = result[0] if result else None
 
@@ -1439,7 +1467,7 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
                     else:
                         logging.warning(f"⚠️ sentence_id не найдено для предложения '{original_text}'")
                     
-                    # ✅ Вставляем данные в базу
+                    # ✅ Вставляем в таблицу ошибок с использованием общего идентификатора
                     cursor.execute("""
                         INSERT INTO detailed_mistakes_deepseek (
                             user_id, sentence, added_data, main_category, sub_category, severity, mistake_count, sentence_id
@@ -1448,7 +1476,8 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
                         DO UPDATE SET
                             mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
                             last_seen = NOW();
-                    """, (user_id, original_text, main_category, sub_category, severity, sentence_id))
+                    """, (user_id, original_text, main_category, sub_category, severity, sentence_id)
+                    )
                     
                     conn.commit()
                     print(f"✅ Ошибка '{main_category} - {sub_category}' успешно записана в базу.")
@@ -1514,7 +1543,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             # Получаем оригинальный текст предложения
             cursor.execute("""
-                SELECT id, sentence, session_id FROM daily_sentences_deepseek 
+                SELECT id, sentence, session_id, id_for_mistake_table FROM daily_sentences_deepseek 
                 WHERE date = CURRENT_DATE AND unique_id = %s AND user_id = %s;
             """, (sentence_number, user_id))
 
@@ -1524,7 +1553,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
                 results.append(f"❌ Ошибка: Предложение {sentence_number} не найдено.")
                 continue
 
-            sentence_id, original_text, session_id = row
+            sentence_id, original_text, session_id, id_for_mistake_table  = row
 
             # Проверяем, отправлял ли этот пользователь перевод этого предложения
             cursor.execute("""
@@ -1567,28 +1596,28 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
             conn.commit()
 
             #deleting sentences from detailed_mistakes_deepseek if score is 90 or more
-            if score >= 90 and sentence_id:
+            if score >= 90 and id_for_mistake_table:
                 try:
                     # ✅ Проверяем, существует ли предложение с таким sentence_id
                     cursor.execute("""
                         SELECT COUNT(*) FROM detailed_mistakes_deepseek
                         WHERE sentence_id = %s;
-                    """, (sentence_id, ))
+                    """, (id_for_mistake_table, ))
 
                     result = cursor.fetchone()
                     if result and result[0] > 0:
-                        logging.info(f"✅ Удаляем предложение с sentence_id = {sentence_id}, так как балл выше 90.")
+                        logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 90.")
                         # ✅ Удаляем все ошибки, связанные с данным предложением
                         cursor.execute("""
                             DELETE FROM detailed_mistakes_deepseek
                             WHERE sentence_id = %s;
-                            """, (sentence_id, ))
+                            """, (id_for_mistake_table, ))
                         conn.commit()
-                        logging.info(f"✅ Предложение с sentence_id = {sentence_id} успешно удалено.")
+                        logging.info(f"✅ Предложение с sentence_id = {id_for_mistake_table} успешно удалено.")
                     else:
-                        logging.warning(f"⚠️ Предложение с sentence_id = {sentence_id} не найдено в базе.")
+                        logging.warning(f"⚠️ Предложение с sentence_id = {id_for_mistake_table} не найдено в базе.")
                 except Exception as e:
-                    logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {sentence_id}: {e}")
+                    logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {id_for_mistake_table}: {e}")
 
 
             if score == 100:
