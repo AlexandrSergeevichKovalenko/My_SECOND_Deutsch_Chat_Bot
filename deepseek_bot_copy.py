@@ -437,31 +437,31 @@ async def start(update: Update, context: CallbackContext):
     await send_main_menu(update, context)
 
 
-async def start_timer(chat_id, context: CallbackContext, message_id, user_id):
-    """Обновляет таймер в Телеграме."""
-    if "start_times" not in context.user_data or user_id not in context.user_data["start_times"]:
-        print(f"❌ Ошибка: `start_times` не найден для пользователя {user_id}!")
-        return
+# async def start_timer(chat_id, context: CallbackContext, message_id, user_id):
+#     """Обновляет таймер в Телеграме."""
+#     if "start_times" not in context.user_data or user_id not in context.user_data["start_times"]:
+#         print(f"❌ Ошибка: `start_times` не найден для пользователя {user_id}!")
+#         return
 
-    start_time = context.user_data["start_times"][user_id]
-    context.user_data["timer_message_id"] = message_id
+#     start_time = context.user_data["start_times"][user_id]
+#     context.user_data["timer_message_id"] = message_id
 
-    while user_id in context.user_data["start_times"]:
-        elapsed_time = datetime.now() - start_time
-        minutes, seconds = divmod(elapsed_time.seconds, 60)
+#     while user_id in context.user_data["start_times"]:
+#         elapsed_time = datetime.now() - start_time
+#         minutes, seconds = divmod(elapsed_time.seconds, 60)
 
-        try:
-            if seconds % 20 == 0:  # ✅ Обновляем раз в 20 секунд
-                await context.bot.edit_message_text(
-                    chat_id=chat_id,
-                    message_id=context.user_data["timer_message_id"],
-                    text=f"⏳ Время перевода: {minutes} мин {seconds} сек"
-                )
-        except Exception as e:
-            print(f"⚠️ Ошибка при обновлении таймера: {e}")
-            await asyncio.sleep(20)  # Telegram рекомендует 20 секунд задержки при Flood Control
+#         try:
+#             if seconds % 20 == 0:  # ✅ Обновляем раз в 20 секунд
+#                 await context.bot.edit_message_text(
+#                     chat_id=chat_id,
+#                     message_id=context.user_data["timer_message_id"],
+#                     text=f"⏳ Время перевода: {minutes} мин {seconds} сек"
+#                 )
+#         except Exception as e:
+#             print(f"⚠️ Ошибка при обновлении таймера: {e}")
+#             await asyncio.sleep(20)  # Telegram рекомендует 20 секунд задержки при Flood Control
 
-        await asyncio.sleep(5)  # ✅ Повторяем цикл каждые 5 секунд
+#         await asyncio.sleep(5)  # ✅ Повторяем цикл каждые 5 секунд
 
 
 # === Логирование ===
@@ -543,11 +543,11 @@ async def letsgo(update: Update, context: CallbackContext):
     # ✅ Запоминаем время старта **для конкретного пользователя**
     context.user_data["start_times"][user_id] = datetime.now()
 
-    # ✅ Отправляем сообщение с таймером
-    timer_message = await update.message.reply_text(f"⏳ Время перевода: 0 мин 0 сек")
+    # # ✅ Отправляем сообщение с таймером
+    # timer_message = await update.message.reply_text(f"⏳ Время перевода: 0 мин 0 сек")
 
-    # ✅ Запускаем `start_timer()` с правильными аргументами
-    asyncio.create_task(start_timer(chat_id, context, timer_message.message_id, user_id))
+    # # ✅ Запускаем `start_timer()` с правильными аргументами
+    # asyncio.create_task(start_timer(chat_id, context, timer_message.message_id, user_id))
 
 
     # 🔹 Проверяем, выбрал ли пользователь тему
@@ -940,7 +940,9 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
 async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
     client = openai.AsyncOpenAI(api_key=openai.api_key)
     
+    # ✅ Показываем сообщение о начале проверки
     message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Ну, глянем что ты тут напереводил...")
+    
     await simulate_typing(context, update.message.chat_id, duration=3)
 
     prompt = f"""
@@ -990,35 +992,42 @@ async def check_translation(original_text, user_translation, update: Update, con
         """
 
 
-    collected_text = ""
-    last_update_time = asyncio.get_running_loop().time()
-    finished = False
+    # collected_text = ""
+    # last_update_time = asyncio.get_running_loop().time()
+    # finished = False
 
     for attempt in range(3):
         try:
-            stream_response = await client.chat.completions.create(
+            response = await client.chat.completions.create(
                 model="gpt-4-turbo",
-                messages=[{"role": "user", "content": prompt}],
-                stream=True
+                messages=[{"role": "user", "content": prompt}]
             )
 
-            async for chunk in stream_response:
-                if finished:
-                    break
-                if chunk.choices[0].delta.content:
-                    new_text = chunk.choices[0].delta.content
-                    collected_text += new_text
+            # async for chunk in stream_response:
+            #     if finished:
+            #         break
+            #     if chunk.choices[0].delta.content:
+            #         new_text = chunk.choices[0].delta.content
+            #         collected_text += new_text
 
-                    if asyncio.get_running_loop().time() - last_update_time > 5:
-                        await message.edit_text(collected_text)
-                        last_update_time = asyncio.get_running_loop().time()
+            #         if asyncio.get_running_loop().time() - last_update_time > 15:
+            #             try:
+            #                 await message.edit_text(collected_text)
+            #                 last_update_time = asyncio.get_running_loop().time()
+            #             except TelegramError as e:
+            #                 if 'flood control' in str(e).lower():
+            #                     wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 15
+            #                     print(f"⚠️ Flood control exceeded. Ждём {wait_time} секунд...")
+            #                     await asyncio.sleep(wait_time)
 
-            # ✅ Прерываем цикл после успешного получения полного ответа
-            if collected_text and not finished:
-                finished = True
+
+            # # ✅ Прерываем цикл после успешного получения полного ответа
+            # if collected_text and not finished:
+            #     finished = True
                 
-                await message.edit_text(collected_text)
+            #     await message.edit_text(collected_text)
             
+            collected_text = response.choices[0].message.content
             # ✅ Логируем полный ответ для анализа
             print(f"🔎 FULL RESPONSE:\n{collected_text}")
 
@@ -1110,6 +1119,8 @@ async def check_translation(original_text, user_translation, update: Update, con
             keyboard = [[InlineKeyboardButton("❓ Explain me with Claude", callback_data=f"explain:{message_id}")]]
             reply_markup = InlineKeyboardMarkup(keyboard)
 
+            # ✅ Задержка в 1,5 секунды для предотвращения блокировки
+            await asyncio.sleep(1.5)
 
             # ✅ Редактируем сообщение, добавляем кнопку
             await sent_message.edit_text(result_text, reply_markup=reply_markup)                        
@@ -1119,25 +1130,25 @@ async def check_translation(original_text, user_translation, update: Update, con
 
             return result_text, categories, subcategories, score, severity, correct_translation
 
-        except TelegramError as e:
-            if 'flood control' in str(e).lower():
-                wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
-                wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
-                print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
-                await asyncio.sleep(wait_time)
+        # except TelegramError as e:
+        #     if 'flood control' in str(e).lower():
+        #         wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
+        #         wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
+        #         print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
+        #         await asyncio.sleep(wait_time)
          
-        
+
         except openai.RateLimitError:
             wait_time = (attempt + 1) * 5
             print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
             await asyncio.sleep(wait_time)
 
 
-        # ✅ Добавляем универсальный блок обработки ошибок:
         except Exception as e:
-            print(f"❌ Непредвиденная ошибка в цикле обработки GPT: {e}")
-            logging.error(f"❌ Непредвиденная ошибка: {e}")
-            
+            logging.error(f"❌ Ошибка: {e}")
+            print(f"❌ Ошибка в цикле обработки: {e}")
+            await asyncio.sleep(5)
+
 
 
 async def handle_explain_request(update: Update, context: CallbackContext):
@@ -2440,8 +2451,8 @@ def main():
     scheduler.add_job(lambda: run_async_job(send_german_news, CallbackContext(application=application)), "cron", hour=6, minute=45)
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=7, minute=7)
-    #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=0, minute=20) 
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="mon", hour=7, minute=7)
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="thu", hour=7, minute=7) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="tue", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=23, minute=59)
     
