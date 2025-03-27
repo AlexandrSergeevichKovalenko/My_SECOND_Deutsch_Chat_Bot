@@ -512,7 +512,7 @@ async def send_morning_reminder(context:CallbackContext):
         "🔹 После перевода всех предложений выполните 📜 Проверить перевод и подтвердите нажатием ✅ Завершить перевод.\n\n"
         "🔹 В 09:00, 12:00 и 15:00 - промежуточные итоги по каждому участнику.\n\n"
         "🔹 Итоговые результаты получим в 23:30.\n\n"
-        "🔹 Узнать свою статистику сразу после перевода - /stats.\n"
+        "🔹 Узнать свою статистику - жми 🟡 Посмотреть свою статистику.\n"
     )
 
     # формируем список команд
@@ -2468,8 +2468,8 @@ def main():
     scheduler.add_job(lambda: run_async_job(send_german_news, CallbackContext(application=application)), "cron", hour=6, minute=45)
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=7, minute=7)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=0, minute=14) 
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="tue", hour=7, minute=7)
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=7, minute=7) 
+    #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=23, minute=59)
     
