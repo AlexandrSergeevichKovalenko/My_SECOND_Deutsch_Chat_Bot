@@ -1685,7 +1685,7 @@ async def get_original_sentences(user_id, context: CallbackContext):
                     mistake_sentences.append(sentence)
                     already_given_sentence_ids.add(sentence_id)
 
-                    # ✅ Ограничиваем до нужного количества предложений (например, 6)
+                    # ✅ Ограничиваем до нужного количества предложений (например, 5)
                     if len(mistake_sentences) == 5:
                         break
 
@@ -1917,6 +1917,8 @@ async def check_url(url):
 
 def escape_markdown_v2(text):
     # Экранируем только спецсимволы Markdown
+    if not isinstance(text, str):
+        text = str(text)
     escape_chars = r'_*[]()~`>#+-=|{}.!'
     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 
@@ -1939,96 +1941,111 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
 
     for user_id, in user_ids:
         total_sentences, mistakes_week, top_mistake_category, number_of_top_category_mistakes, top_mistake_subcategory_1, top_mistake_subcategory_2 = await rate_mistakes(user_id)
+        if total_sentences:
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;""",
+                        (user_id, ))
 
-        with get_db_connection() as conn:
-            with conn.cursor() as cursor:
-                cursor.execute("""
-                    SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;""",
-                    (user_id, ))
+                    result = cursor.fetchone()
+                    username = result[0] if result else "Unknown User"
 
-                result = cursor.fetchone()
-                username = result[0] if result else "Unknown User"
+            # ✅ Запрашиваем тему у OpenAI
+            prompt = f"""
+            Ты эксперт по изучению грамматики немецкого языка.  
+            Пользователь допустил следующие ошибки:  
 
-        # ✅ Запрашиваем тему у OpenAI
-        prompt = f"""
-        Ты эксперт по изучению грамматики немецкого языка.  
-        Пользователь допустил следующие ошибки:  
+            - **Категория ошибки:** {top_mistake_category}  
+            - **Первая подкатегория:** {top_mistake_subcategory_1}  
+            - **Вторая подкатегория:** {top_mistake_subcategory_2}  
 
-        - **Категория ошибки:** {top_mistake_category}  
-        - **Первая подкатегория:** {top_mistake_subcategory_1}  
-        - **Вторая подкатегория:** {top_mistake_subcategory_2}  
+            Определи для пользователя тему грамматики для проработки и изучение на основе этих данных (например, "Plusquamperfekt"). 
+            **Выводи только одно слово или короткую фразу**.
+            """
 
-        Определи для пользователя тему грамматики для проработки и изучение на основе этих данных (например, "Plusquamperfekt"). 
-        **Выводи только одно слово или короткую фразу**.
-        """
+            for attempt in range(5):
+                try:
+                    response = await client.chat.completions.create(
+                    model="gpt-4-turbo",
+                    messages=[{"role": "user", "content": prompt}]
+                    )
+                    topic = response.choices[0].message.content.strip()
+                    print(f"📌 Определена тема: {topic}")
+                    break
+                except openai.RateLimitError:
+                    wait_time = (attempt + 1 )*5
+                    print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
+                    await asyncio.sleep(wait_time)
+                except Exception as e:
+                    print(f"⚠️ Ошибка OpenAI: {e}")
+                    continue
+                
+            # ✅ Ищем видео на YouTube только по конкретным каналам
+            video_data = search_youtube_videous(topic)
 
-        for attempt in range(5):
-            try:
-                response = await client.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[{"role": "user", "content": prompt}]
-                )
-                topic = response.choices[0].message.content.strip()
-                print(f"📌 Определена тема: {topic}")
-                break
-            except openai.RateLimitError:
-                wait_time = (attempt + 1 )*5
-                print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
-                await asyncio.sleep(wait_time)
-            except Exception as e:
-                print(f"⚠️ Ошибка OpenAI: {e}")
-                continue
+            # ✅ Добавляем логирование для диагностики
+            if not isinstance(video_data, list):
+                print(f"❌ ОШИБКА: search_youtube_videous вернула {type(video_data)} вместо списка!")
+            if not video_data:
+                print("❌ Видео не найдено. Список пуст.")
+            else:
+                print(f"✅ Найдено {len(video_data)} видео:")
+                for video in video_data:
+                    print(f"▶️ {video}")
             
-        # ✅ Ищем видео на YouTube только по конкретным каналам
-        video_data = search_youtube_videous(topic)
+            # ✅ Формируем список ссылок только если элемент является словарём
+            # ✅ Нет необходимости преобразовывать снова — список уже готов
+            valid_links = video_data
 
-        # ✅ Добавляем логирование для диагностики
-        if not isinstance(video_data, list):
-            print(f"❌ ОШИБКА: search_youtube_videous вернула {type(video_data)} вместо списка!")
-        if not video_data:
-            print("❌ Видео не найдено. Список пуст.")
+            
+            if not valid_links:
+                valid_links = ["❌ Не удалось найти видео на YouTube по этой теме. Попробуйте позже."]
+
+            rounded_value = round(mistakes_week/total_sentences, 2)
+            # ✅ Формируем сообщение для пользователя
+            recommendations = (
+                f"🧔 *{escape_markdown_v2(username)},\nВы перевели за неделю:* {escape_markdown_v2(total_sentences)} предложений;\n"
+                f"📌 *В них допущено* {escape_markdown_v2(mistakes_week)} ошибок;\n"
+                f"🚨 *Количество ошибок на одно предложение:* {escape_markdown_v2(f'{rounded_value} штук;')}\n"
+                f"🔴 *Больше всего ошибок* {escape_markdown_v2(number_of_top_category_mistakes)} штук *в категории*:\n {escape_markdown_v2(top_mistake_category) or 'неизвестно'}\n"
+            )
+            if top_mistake_subcategory_1:
+                recommendations += (f"📜 *Основные ошибки в подкатегории:*\n {escape_markdown_v2(top_mistake_subcategory_1)}\n\n")
+            if top_mistake_subcategory_2:
+                recommendations += (f"📜 *Вторые по частоте ошибки в подкатегории:*\n {escape_markdown_v2(top_mistake_subcategory_2)}\n\n")
+            
+            # ✅ Добавляем строку с рекомендацией → ЭТО ВАЖНО!
+            recommendations += (f"🟢 *Рекомендую посмотреть:*\n\n")
+
+
+            # ✅ Добавляем рабочие ссылки
+            recommendations += "\n\n".join(valid_links)
+            
+            #Debugging...
+            print("DEBUG: ", recommendations)
+
+
+            # ✅ Отправляем сообщение пользователю
+            await context.bot.send_message(
+                chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, 
+                text=recommendations,
+                parse_mode = "MarkdownV2"
+                )
+
         else:
-            print(f"✅ Найдено {len(video_data)} видео:")
-            for video in video_data:
-                print(f"▶️ {video}")
-        
-        # ✅ Формируем список ссылок только если элемент является словарём
-        # ✅ Нет необходимости преобразовывать снова — список уже готов
-        valid_links = video_data
-
-        
-        if not valid_links:
-            valid_links = ["❌ Не удалось найти видео на YouTube по этой теме. Попробуйте позже."]
-
-
-        # ✅ Формируем сообщение для пользователя
-        recommendations = (
-            f"🧔 *{escape_markdown_v2(username)},\nВы перевели за неделю:* {total_sentences} предложений.\n"
-            f"📌 *В них допущено* {mistakes_week} ошибок.\n"
-            f"🚨 *Количество ошибок на одно предложение:\n* {round(mistakes_week/total_sentences, 2)} штук.\n"
-            f"🔴 *Больше всего ошибок* {number_of_top_category_mistakes} *в категории*:\n {escape_markdown(top_mistake_category) or 'неизвестно'}\n"
-        )
-        if top_mistake_subcategory_1:
-            recommendations += (f"📜 *Основные ошибки в подкатегории:*\n {escape_markdown(top_mistake_subcategory_1)}\n\n")
-        if top_mistake_subcategory_2:
-            recommendations += (f"📜 *Вторые по частоте ошибки в подкатегории:*\n {escape_markdown(top_mistake_subcategory_2)}\n\n")
-        
-        # ✅ Добавляем строку с рекомендацией → ЭТО ВАЖНО!
-        recommendations += (f"🟢 *Рекомендую посмотреть:*\n\n")
-
-
-        # ✅ Добавляем рабочие ссылки
-        recommendations += "\n\n".join(valid_links)
-        
-        #Debugging...
-        print("DEBUG: ", recommendations)
-
-
-        # ✅ Отправляем сообщение пользователю
-        await context.bot.send_message(
-            chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, 
-            text=recommendations,
-            parse_mode = "MarkdownV2"
+            with get_db_connection() as conn:
+                with conn.cursor() as cursor:
+                    cursor.execute("""
+                        SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;
+                    """, (user_id, ))
+                    result = cursor.fetchone()
+                    username = result[0] if result else f"User {user_id}"
+            
+            await context.bot.send_message(
+                chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID,
+                text=escape_markdown_v2(f"⚠️ Пользователь {username} не перевёл ни одного предложения на этой неделе."),
+                parse_mode="MarkdownV2"
             )
 
 
@@ -2451,7 +2468,7 @@ def main():
     scheduler.add_job(lambda: run_async_job(send_german_news, CallbackContext(application=application)), "cron", hour=6, minute=45)
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=7, minute=7)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="thu", hour=7, minute=7) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=0, minute=14) 
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="tue", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=23, minute=59)
