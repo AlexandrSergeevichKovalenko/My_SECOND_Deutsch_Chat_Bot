@@ -1726,7 +1726,15 @@ async def get_original_sentences(user_id, context: CallbackContext):
 PREFERRED_CHANNELS = [
     "UCthmoIZKvuR1-KuwednkjHg",  # Deutsch mit Yehor
     "UCHLkEhIoBRu2JTqYJlqlgbw",  # Deutsch mit Rieke
-    "UCeVQK7ZPXDOAyjY0NYqmX-Q"   # Benjamin - Der Deutschlehrer
+    "UCeVQK7ZPXDOAyjY0NYqmX-Q", # Benjamin - Der Deutschlehrer
+    "UCuVbK_d3wh3M8TYUk5aFCiQ",   # Lera
+    "UCsxqCqZHE6guBCdSUEWpPsg",
+    "UCm-E8MXdNquzETSsNxgoWig",
+    "UCjdRXC3Wh2hDq8Utx7RIaMw",
+    "UC9rwo-ES6aDKxD2qqkL6seA",
+    "UCVx6RFaEAg46xfbsDjb440A",
+    "UCvs8dBa7v3ti1QDaXE7dtKw",
+    "UCE2vOZZIluHMtt2sAXhRhcw"
 ]
 
 def search_youtube_videous(topic, max_results=5):
