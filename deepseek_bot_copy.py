@@ -1343,38 +1343,39 @@ async def check_translation_with_claude(original_text, user_translation, update,
         return "❌ Ошибка: Не удалось обработать ответ от Claude."
     
     # Собираем результат в список
-    result_list = []
+    result_list = ["📥 Explanation with Claude:\n"]
 
     # Добавляем ошибки
     for line in list_of_errors_pattern:
-        result_list.append(f"**{line[0]} {line[1]}:** {line[2]}")
+        result_list.append(f"❗ **{line[0]} {line[1]}:** {line[2]}\n")
 
     # Добавляем корректный перевод
     for item in correct_translation:
-        result_list.append(f"**{item[0]}:** {item[1]}")
+        result_list.append(f"✅ **{item[0]}:**\n➡️ {item[1]}\n")
 
     # Добавляем объяснения грамматики
     for k in grammar_explanation_pattern:
-        result_list.append(f"**{k[0]}:**")  # Добавляем заголовок
+        result_list.append(f"**🟡 {k[0]}:**")  # Добавляем заголовок
         grammar_parts = k[1].split("\n")  # Разбиваем текст по строкам
         for part in grammar_parts:
             clean_part = part.strip()
             if clean_part and clean_part not in ["-", ":"]:
-                result_list.append(clean_part)
+                result_list.append(f"🔎 {clean_part}")
+    result_list.append("\n")    
 
     # Добавляем альтернативные варианты
     for a in altern_sentence_pattern:
-        result_list.append(f"**{a[0]}:** {a[1].strip()}")  # Убираем лишние пробелы
+        result_list.append(f"✏️ **{a[0]}:\n** {a[1].strip()}\n\n")  # Убираем лишние пробелы
 
     # Добавляем синонимы
     if synonyms_pattern:
-        result_list.append("Synonyms:")
+        result_list.append("➡️ Synonyms:")
         for s in synonyms_pattern:
             synonym_parts = s.split("\n")
             for part in synonym_parts:
                 clean_part = part.strip()
                 if clean_part:
-                    result_list.append(f"{clean_part}")
+                    result_list.append(f"🔄 {clean_part}")
 
     # результат
     result_line_for_output = "\n".join(result_list)
@@ -1660,7 +1661,7 @@ async def get_original_sentences(user_id, context: CallbackContext):
 
     try:
     
-        # Выполняем SQL-запрос: выбираем 2 случайных предложений из базы данных в которую мы предварительно поместили предложение
+        # Выполняем SQL-запрос: выбираем 1 случайных предложений из базы данных в которую мы предварительно поместили предложение
         cursor.execute("SELECT sentence FROM sentences_deepseek ORDER BY RANDOM() LIMIT 1;")
         rows = [row[0] for row in cursor.fetchall()]   # Возвращаем список предложений
         print(f"📌 Найдено в базе данных: {rows}") # ✅ Логируем результат
