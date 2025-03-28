@@ -720,8 +720,8 @@ async def done(update: Update, context: CallbackContext):
     user_id = user.id
 
     # ✅ Даём 5 секунд на завершение записи переводов в базу данных
-    logging.info(f"⌛ Ждём 5 секунд перед завершением сессии для пользователя {user_id}...")
-    await asyncio.sleep(5)
+    logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
+    await asyncio.sleep(120)
 
     conn = get_db_connection()
     cursor = conn.cursor()
