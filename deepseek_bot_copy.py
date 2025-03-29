@@ -719,9 +719,9 @@ async def done(update: Update, context: CallbackContext):
     user = update.message.from_user
     user_id = user.id
 
-    # ✅ Даём 5 секунд на завершение записи переводов в базу данных
-    logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
-    await asyncio.sleep(120)
+    # # ✅ Даём 5 секунд на завершение записи переводов в базу данных
+    # logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
+    # await asyncio.sleep(120)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -743,6 +743,32 @@ async def done(update: Update, context: CallbackContext):
         return
     session_id = session[0]   # ID текущей сессии
 
+    # 📊 Получаем общее количество предложений
+    cursor.execute("""
+        SELECT COUNT(*) FROM daily_sentences_deepseek 
+        WHERE user_id = %s AND session_id = %s;
+        """, (user_id, session_id))
+    
+    total_sentences = cursor.fetchone()[0]
+    logging.info(f"🔄 Ожидаем записи всех переводов пользователя {user_id}. Всего предложений: {total_sentences}")
+
+    # ⏳ Ждём до 120 секунд, пока все переводы не будут записаны
+    max_retries = 120
+    for i in range(0, max_retries, 5):
+        cursor.execute("""
+            SELECT COUNT(*) FROM translations_deepseek
+            WHERE user_id = %s AND session_id = %s; 
+            """, (user_id, session_id))
+        translated_count = cursor.fetchone()[0]
+
+        if translated_count >= total_sentences:
+            logging.info(f"✅ Все переводы записаны: {translated_count}/{total_sentences}")
+            break
+
+        logging.info(f"⌛ Переведено {translated_count}/{total_sentences}. Ожидание... {i+1} сек.")
+        await asyncio.sleep(5)
+
+
     # ✅ Позволяем пользователю всегда завершать сессию вручную
     cursor.execute("""
         UPDATE user_progress_deepseek
@@ -751,22 +777,23 @@ async def done(update: Update, context: CallbackContext):
         (user_id, ))
     conn.commit()
 
-    # 🔹 Проверяем, все ли предложения переведены
-    cursor.execute("""
-        SELECT COUNT(*) FROM daily_sentences_deepseek
-        WHERE user_id = %s AND session_id = %s;
-    """, (user_id, session_id))
-    total_sentences = cursor.fetchone()[0]
+
+    # 🔹 Проверяем, все ли предложения переведены. Выполнили уже выше проверку.
+    # cursor.execute("""
+    #     SELECT COUNT(*) FROM daily_sentences_deepseek
+    #     WHERE user_id = %s AND session_id = %s;
+    # """, (user_id, session_id))
+    # total_sentences = cursor.fetchone()[0]
 
     cursor.execute("""
         SELECT COUNT(*) FROM translations_deepseek
         WHERE user_id = %s AND session_id = %s;
         """,(user_id, session_id))
-    translated_count = cursor.fetchone()[0]
+    final_translated_count = cursor.fetchone()[0]
 
-    if translated_count < total_sentences:
+    if final_translated_count < total_sentences:
         await update.message.reply_text(
-            f"⚠️ Вы перевели {translated_count} из {total_sentences} предложений.\n"
+            f"⚠️ Вы перевели {final_translated_count} из {total_sentences} предложений.\n"
             "Перевод завершён, но не все предложения переведены! Это повлияет на ваш итоговый балл."           
         )
     else:
@@ -995,6 +1022,12 @@ async def check_translation(original_text, user_translation, update: Update, con
     # collected_text = ""
     # last_update_time = asyncio.get_running_loop().time()
     # finished = False
+# Переменные для хранения результата
+    score = None
+    categories = []
+    subcategories = []
+    severity = None
+    correct_translation = None
 
     for attempt in range(3):
         try:
@@ -1033,7 +1066,7 @@ async def check_translation(original_text, user_translation, update: Update, con
 
 
             # ✅ Парсим результат
-            score = collected_text.split("Score: ")[-1].split("/")[0].strip() if "Score:" in collected_text else None
+            score_str = collected_text.split("Score: ")[-1].split("/")[0].strip() if "Score:" in collected_text else None
             
             #my offer to split by ", " because it is a string and take all list
             # ✅ Ограничиваем строку до конца строки с помощью split("\n")[0]
@@ -1066,9 +1099,48 @@ async def check_translation(original_text, user_translation, update: Update, con
             if not subcategories:
                 print(f"⚠️ Подкатегории отсутствуют в ответе GPT")
 
+            if score_str and severity and correct_translation:
+                score = score_str
+                print(f"✅ Успешно получены все обязательные данные на попытке {attempt + 1}")
+                break
+            
+            else:
+                missing_fields = []
+                if not score_str:
+                    missing_fields.append("Score")
+                if not severity:
+                    missing_fields.append("Severity")
+                if not correct_translation:
+                    missing_fields.append("Correct Translation")
+                print(f"⚠️ Не получены обязательные поля: {', '.join(missing_fields)}. Повторяем запрос...")
 
-            # ✅ Убираем лишние пробелы для ровного форматирования
-            result_text = f"""
+        except openai.RateLimitError:
+            wait_time = (attempt + 1) * 5
+            print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
+            await asyncio.sleep(wait_time)
+
+        except Exception as e:
+            logging.error(f"❌ Ошибка: {e}")
+            print(f"❌ Ошибка в цикле обработки: {e}")
+            await asyncio.sleep(5)
+
+
+    # Если после всех попыток данные не получены, задаём значения по умолчанию
+    if score is None:
+        score = "0"
+        print("❌ После всех попыток Score не получен. Устанавливаем 0.")
+    if severity is None:
+        severity = "3"
+        print("❌ После всех попыток Severity не получен. Устанавливаем 3.")
+    if correct_translation is None:
+        correct_translation = user_translation  # Используем перевод пользователя как заглушку
+        print("❌ После всех попыток Correct Translation не получен. Используем перевод пользователя.")
+
+
+
+
+    # ✅ Убираем лишние пробелы для ровного форматирования
+    result_text = f"""
 🟢 Sentence number: {str(sentence_number)}\n
 ✅ Score: {str(score)}/100\n
 🔵 Original Sentence: {escape_markdown(original_text)}\n
@@ -1089,66 +1161,53 @@ async def check_translation(original_text, user_translation, update: Update, con
 #🔴 *Mistake Categories:* {escape_markdown(', '.join(categories[:2]) or "No mistakes")}\n
 #🔴 *Mistake Subcategory:* {escape_markdown(', '.join(subcategories[:2]) or "No mistakes")}\n
 
-            # ✅ Если балл > 75 → стилистическая ошибка
-            if score and score.isdigit() and int(score) > 75:
-                result_text += "\n✅ Перевод на высоком уровне — считаем это незначительной ошибкой."
+    # ✅ Если балл > 75 → стилистическая ошибка
+    if score and score.isdigit() and int(score) > 75:
+        result_text += "\n✅ Перевод на высоком уровне — считаем это незначительной ошибкой."
 
-            # ✅ Отправляем текст в Telegram с поддержкой Markdown
-            sent_message = await context.bot.send_message(
-                chat_id=update.message.chat_id,
-                text=result_text,
-                parse_mode=None
-            )
+    # ✅ Отправляем текст в Telegram с поддержкой Markdown
+    sent_message = await context.bot.send_message(
+        chat_id=update.message.chat_id,
+        text=result_text,
+        parse_mode=None
+    )
 
-            message_id = sent_message.message_id
-            
-            # ✅ Сохраняем данные в context.user_data
-            if len(context.user_data) >= 10:
-                oldest_key = next(iter(context.user_data))
-                del context.user_data[oldest_key]  # Удаляем самые старые данные
+    message_id = sent_message.message_id
+    
+    # ✅ Сохраняем данные в context.user_data
+    if len(context.user_data) >= 10:
+        oldest_key = next(iter(context.user_data))
+        del context.user_data[oldest_key]  # Удаляем самые старые данные
 
-            context.user_data[f"translation_{message_id}"] = {
-                "original_text": original_text,
-                "user_translation": user_translation
-            }
+    context.user_data[f"translation_{message_id}"] = {
+        "original_text": original_text,
+        "user_translation": user_translation
+    }
 
-            # ✅ Удаляем сообщение с индикатором "Генерация ответа"
-            await message.delete()
+    # ✅ Удаляем сообщение с индикатором "Генерация ответа"
+    await message.delete()
 
-            # ✅ Добавляем инлайн-кнопку после отправки сообщения
-            keyboard = [[InlineKeyboardButton("❓ Explain me with Claude", callback_data=f"explain:{message_id}")]]
-            reply_markup = InlineKeyboardMarkup(keyboard)
+    # ✅ Добавляем инлайн-кнопку после отправки сообщения
+    keyboard = [[InlineKeyboardButton("❓ Explain me with Claude", callback_data=f"explain:{message_id}")]]
+    reply_markup = InlineKeyboardMarkup(keyboard)
 
-            # ✅ Задержка в 1,5 секунды для предотвращения блокировки
-            await asyncio.sleep(1.5)
+    # ✅ Задержка в 1,5 секунды для предотвращения блокировки
+    await asyncio.sleep(1.5)
 
-            # ✅ Редактируем сообщение, добавляем кнопку
-            await sent_message.edit_text(result_text, reply_markup=reply_markup)                        
+    # ✅ Редактируем сообщение, добавляем кнопку
+    await sent_message.edit_text(result_text, reply_markup=reply_markup)                        
 
-            # ✅ Логируем успешную проверку
-            logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
+    # ✅ Логируем успешную проверку
+    logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
 
-            return result_text, categories, subcategories, score, severity, correct_translation
+    return result_text, categories, subcategories, score, severity, correct_translation
 
-        # except TelegramError as e:
-        #     if 'flood control' in str(e).lower():
-        #         wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
-        #         wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
-        #         print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
-        #         await asyncio.sleep(wait_time)
-         
-
-        except openai.RateLimitError:
-            wait_time = (attempt + 1) * 5
-            print(f"⚠️ OpenAI API перегружен. Ждём {wait_time} сек...")
-            await asyncio.sleep(wait_time)
-
-
-        except Exception as e:
-            logging.error(f"❌ Ошибка: {e}")
-            print(f"❌ Ошибка в цикле обработки: {e}")
-            await asyncio.sleep(5)
-
+# except TelegramError as e:
+#     if 'flood control' in str(e).lower():
+#         wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
+#         wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
+#         print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
+#         await asyncio.sleep(wait_time)
 
 
 async def handle_explain_request(update: Update, context: CallbackContext):
@@ -1343,7 +1402,7 @@ async def check_translation_with_claude(original_text, user_translation, update,
         return "❌ Ошибка: Не удалось обработать ответ от Claude."
     
     # Собираем результат в список
-    result_list = ["📥 Explanation with Claude:\n"]
+    result_list = ["📥 Explanation with Claude:\n", f"💡 Original russian sentence:\n{original_text}\n", f"💡 User translation:\n{user_translation}\n"]
 
     # Добавляем ошибки
     for line in list_of_errors_pattern:
@@ -1361,21 +1420,26 @@ async def check_translation_with_claude(original_text, user_translation, update,
             clean_part = part.strip()
             if clean_part and clean_part not in ["-", ":"]:
                 result_list.append(f"🔎 {clean_part}")
-    result_list.append("\n")    
+    #result_list.append("\n")    
 
     # Добавляем альтернативные варианты
     for a in altern_sentence_pattern:
-        result_list.append(f"✏️ **{a[0]}:\n** {a[1].strip()}\n\n")  # Убираем лишние пробелы
+        result_list.append(f"✏️ **{a[0]}:\n** {a[1].strip()}\n")  # Убираем лишние пробелы
 
     # Добавляем синонимы
     if synonyms_pattern:
         result_list.append("➡️ Synonyms:")
+        #count = 0
         for s in synonyms_pattern:
             synonym_parts = s.split("\n")
             for part in synonym_parts:
                 clean_part = part.strip()
-                if clean_part:
-                    result_list.append(f"🔄 {clean_part}")
+                if not clean_part:
+                    continue
+                # if count > 0 and count % 2 == 0:
+                #     result_list.append(f"{'-'*33}")
+                result_list.append(f"🔄 {clean_part}")
+                #count += 1
 
     # результат
     result_line_for_output = "\n".join(result_list)
