@@ -668,7 +668,7 @@ async def letsgo(update: Update, context: CallbackContext):
 
     text= (
     f"🚀 {user.first_name}, Вы начали перевод! Время пошло.\n\n"
-    "✏️ Отправьте ваши переводы в формате: 1. Mein Name ist Konchita.\n\n"
+    "✏️ Отправьте ваши переводы в формате:\n1. Mein Name ist Konchita.\n\n"
     )
 
     await context.bot.send_message(chat_id=update.message.chat_id, text=text)
@@ -678,7 +678,6 @@ async def letsgo(update: Update, context: CallbackContext):
         #"После того как вы отправите все переводы, нажмите **'📜 Проверить перевод'**, чтобы проверить их.\n"
         #"Когда все переводы будут проверены, нажмите **'✅ Завершить перевод'**, чтобы зафиксировать время!"
     )
-
 
 
 # 🔹 **Функция, которая запоминает переводы, но не проверяет их**
@@ -2105,6 +2104,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
                 text=recommendations,
                 parse_mode = "MarkdownV2"
                 )
+            await asyncio.sleep(5)
 
         else:
             with get_db_connection() as conn:
@@ -2536,20 +2536,26 @@ def main():
     # ✅ Добавляем задачу в `scheduler` ДЛЯ УТРА
     print("📌 Добавляем задачу в scheduler...")
     scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=6, minute=30)
-    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=15, minute=1)
+    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=15, minute=30)
 
-    scheduler.add_job(lambda: run_async_job(send_german_news, CallbackContext(application=application)), "cron", hour=6, minute=45)
+    scheduler.add_job(
+        lambda: run_async_job(send_german_news, CallbackContext(application=application)), 
+        "cron",
+        hour=4,
+        minute=1,
+        day_of_week = "mon,tue,thu,fri,sat"
+    )
     
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=7, minute=7)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=7, minute=7) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=5, minute=7)
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=9) 
     #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7)
     
-    scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=23, minute=59)
+    scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)
     
-    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=22, minute=45)
-    scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=22, minute=55)
+    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=20, minute=15)
+    scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=20, minute=20)
 
-    for hour in [9,14,18]:
+    for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
 
