@@ -978,7 +978,17 @@ async def check_translation(original_text, user_translation, update: Update, con
     **User's translation (German):** "{user_translation}"
 
     **Your task:**
-    1. **Give a score from 0 to 100** based on the original content, correct vocabulary usage, grammatical accuracy (this is the most important criterion when grading), and style. If the content is completely inaccurate, the score is zero.  
+    1. **Give a score from 0 to 100**. Use these grading guidelines:
+    - Start from 100 points.
+    - Subtract points based on the severity and number of grammatical and vocabulary errors.
+    - Penalize most heavily for grammatical accuracy (especially incorrect verb conjugation, case usage, word order).
+    - Deduct:
+        - 1–5 points: minor word choice or stylistic issues that don't change meaning.
+        - 6–15 points: grammar or case errors that make the sentence slightly awkward or unclear.
+        - 16–30 points: major grammar or vocabulary errors that affect understanding.
+        - 31–50 points: multiple severe mistakes or misunderstanding of key parts.
+        - 51–100 points: completely wrong meaning or incomprehensible translation.
+    - Do NOT assign a score of 0 unless the translation is completely unrelated or empty. 
 
     2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
     - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
