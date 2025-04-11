@@ -1,5 +1,3 @@
-# Этот бот может работать с DEEPSEEK
-# Полностью рабочий код Только не поддерживает Topic А нужно убрать их и работать в одной общей группе
 import os
 import logging
 import openai
@@ -8,7 +6,7 @@ import psycopg2
 import datetime
 from datetime import datetime, time
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler, Defaults
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncio
@@ -19,15 +17,30 @@ import re
 import requests
 import aiohttp
 from telegram.ext import CallbackContext
-import aiohttp
 from googleapiclient.discovery import build
 from telegram.error import TelegramError
 from telegram.helpers import escape_markdown
 import anthropic
 from anthropic import AsyncAnthropic
+from telegram.error import TimedOut, BadRequest
+import tempfile
 
+
+from google.cloud import texttospeech
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from pydub import AudioSegment
+import io
+load_dotenv() # Загружаем переменные из .env
+# Ты кладёшь GOOGLE_APPLICATION_CREDENTIALS=/path/... в .env.
+# load_dotenv() загружает .env и делает вид, что это переменные окружения.
+# os.getenv(...) читает эти значения.
+# Ты вручную регистрируешь это в переменных окружения процесса
+# os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 
 application = None
+
 
 
 # Buttons in Telegramm
@@ -308,12 +321,12 @@ def initialise_database():
                             'Unclassified mistake' -- Для ошибок, которые не попали в категории
                         )),
                         
-                        severity INT DEFAULT 1,  -- Уровень серьёзности ошибки (1 — низкий, 5 — высокий)
                         mistake_count INT DEFAULT 1, -- Количество раз, когда ошибка была зафиксирована
                         first_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время первой фиксации ошибки
                         last_seen TIMESTAMP DEFAULT CURRENT_TIMESTAMP, -- Время последнего появления ошибки
                         error_count_week INT DEFAULT 0, -- Количество ошибок за последнюю неделю
                         sentence_id INT,
+                        correct_translation TEXT NOT NULL,
 
                         -- ✅ Уникальный ключ для предотвращения дубликатов
                         CONSTRAINT for_mistakes_table UNIQUE (user_id, sentence, main_category, sub_category)
@@ -338,6 +351,11 @@ async def log_all_messages(update: Update, context: CallbackContext):
         logging.error(f"❌ Ошибка логирования сообщения: {e}")
     
 
+# Функция для добавления в словарь всех id Сообщений которые потом я буду удалять, Это служебные сообщения вспомогательные
+def add_service_msg_id(context, message_id):
+    context.user_data.setdefault("service_message_ids", []).append(message_id)
+    print(f"DEBUG: Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
+
 
 #Имитация набора текста с typing-индикатором
 async def simulate_typing(context, chat_id, duration=3):
@@ -355,6 +373,9 @@ async def send_main_menu(update: Update, context: CallbackContext):
         ["🚀 Начать перевод", "✅ Завершить перевод"],
         ["📜 Проверить перевод", "🟡 Посмотреть свою статистику"]
     ]
+    
+    # создаем в словаре клю service_message_ids Список для хранения всех id Сообщений, Для того чтобы потом можно было их удалить после выполнения перевода
+    context.user_data.setdefault("service_message_ids", [])
 
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
@@ -362,7 +383,7 @@ async def send_main_menu(update: Update, context: CallbackContext):
     #await update.message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True))
 
     # 2️⃣ Отправляем новое меню
-    await update.message.reply_text("📌 Главное меню", reply_markup=reply_markup)
+    await update.message.reply_text("Используйте кнопки:", reply_markup=reply_markup)
 
 async def debug_message_handler(update: Update, context: CallbackContext):
     print(f"🔹 Получено сообщение (DEBUG): {update.message.text}")
@@ -379,6 +400,10 @@ async def handle_button_click(update: Update, context: CallbackContext):
     
     text = update.message.text.strip()
     print(f"📥 Получено сообщение: {text}")
+    
+    # Не будем удалять Сообщения "✅ Завершить перевод" Чтобы пользователь видел что перевод завершен
+    
+    add_service_msg_id(context, update.message.message_id)
 
     if text == "📌 Выбрать тему":
         await choose_topic(update, context)
@@ -392,6 +417,7 @@ async def handle_button_click(update: Update, context: CallbackContext):
         logging.info(f"📌 Пользователь {update.message.from_user.id} нажал кнопку '📜 Проверить перевод'. Запускаем проверку.")
         await check_translation_from_text(update, context)  # ✅ Теперь сразу запускаем проверку переводов
 
+    
 
 # 🔹 **Функция, которая запускает проверку переводов**
 async def check_translation_from_text(update: Update, context: CallbackContext):
@@ -400,7 +426,8 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
     # Проверяем, есть ли накопленные переводы
     if "pending_translations" not in context.user_data or not context.user_data["pending_translations"]:
         logging.info(f"❌ Пользователь {user_id} нажал '📜 Проверить перевод', но у него нет сохранённых переводов!")
-        await update.message.reply_text("❌ У вас нет непроверенных переводов! Сначала отправьте перевод, затем нажмите '📜 Проверить перевод'.")
+        msg_1 = await update.message.reply_text("❌ У вас нет непроверенных переводов! Сначала отправьте перевод, затем нажмите '📜 Проверить перевод'.")
+        add_service_msg_id(context, msg_1.message_id)
         return
 
     logging.info(f"📌 Пользователь {user_id} нажал кнопку '📜 Проверить перевод'. Запускаем проверку переводов.")
@@ -414,7 +441,8 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
 
     # Если нет отформатированных переводов, выдаём ошибку
     if not formatted_translations:
-        await update.message.reply_text("❌ Ошибка: Нет переводов для проверки!")
+        msg_2 = await update.message.reply_text("❌ Ошибка: Нет переводов для проверки!")
+        add_service_msg_id(context, msg_2.message_id)
         return
 
     # ✅ Формируем команду "/translate" с нужным форматом
@@ -433,7 +461,7 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
 
 async def start(update: Update, context: CallbackContext):
     """Запуск бота и отправка главного меню."""
-    await update.message.reply_text("Привет! Это бот для перевода.")
+    #await update.message.reply_text("Привет! Это бот для перевода.")
     await send_main_menu(update, context)
 
 
@@ -487,7 +515,7 @@ async def log_message(update: Update, context: CallbackContext):
     cursor = conn.cursor()
     try: 
         cursor.execute("""
-            INSERT INTO messages_deepseek (user_id, username, message)
+            INSERT INTO deutsch_messages (user_id, username, message)
             VALUES(%s, %s, %s);
             """,
             (user.id, username, message_text)
@@ -553,9 +581,10 @@ async def letsgo(update: Update, context: CallbackContext):
     # 🔹 Проверяем, выбрал ли пользователь тему
     chosen_topic = context.user_data.get("chosen_topic")
     if not chosen_topic:
-        await update.message.reply_text(
+        msg_1 = await update.message.reply_text(
             "❌ Вы не выбрали тему! Сначала выберите тему используя кнопку '📌 Выбрать тему'"
         )
+        add_service_msg_id(context, msg_1.message_id)
         return  # ⛔ Прерываем выполнение функции, если тема не выбрана
 
     conn = get_db_connection()
@@ -563,7 +592,7 @@ async def letsgo(update: Update, context: CallbackContext):
 
     # Проверяем, не запустил ли уже пользователь перевод (но только за СЕГОДНЯ!)
     cursor.execute("""
-        SELECT user_id FROM user_progress_deepseek
+        SELECT user_id FROM deutsch_user_progress
         WHERE user_id = %s AND start_time::date = CURRENT_DATE AND completed = FALSE;
         """, (user_id, ))
     active_session = cursor.fetchone()
@@ -571,14 +600,15 @@ async def letsgo(update: Update, context: CallbackContext):
     if active_session is not None:
         logging.info(f"⏳ Пользователь {username} ({user_id}) уже начал перевод сегодня.")
         #await update.message.reply_animation("https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif")
-        await update.message.reply_text("❌ Вы уже начали перевод! Завершите его перед повторным запуском нажав на кнопку '✅ Завершить перевод'")
+        msg_2 = await update.message.reply_text("❌ Вы уже начали перевод! Завершите его перед повторным запуском нажав на кнопку '✅ Завершить перевод'")
+        add_service_msg_id(context, msg_2.message_id)
         cursor.close()
         conn.close()
         return
 
     # ✅ **Автоматически завершаем вчерашние сессии**
     cursor.execute("""
-        UPDATE user_progress_deepseek
+        UPDATE deutsch_user_progress
         SET end_time = NOW(), completed = TRUE
         WHERE user_id = %s AND start_time::date < CURRENT_DATE AND completed = FALSE;
     """, (user_id,))
@@ -588,7 +618,7 @@ async def letsgo(update: Update, context: CallbackContext):
 
     # ✅ **Создаём новую запись в `user_progress`, НЕ ЗАТИРАЯ старые сессии и получаем `session_id`****
     cursor.execute("""
-        INSERT INTO user_progress_deepseek (session_id, user_id, username, start_time, completed) 
+        INSERT INTO deutsch_user_progress (session_id, user_id, username, start_time, completed) 
         VALUES (%s, %s, %s, NOW(), FALSE);
     """, (session_id, user_id, username))
     
@@ -606,7 +636,7 @@ async def letsgo(update: Update, context: CallbackContext):
 
     # Определяем стартовый индекс (если пользователь делал /getmore)
     cursor.execute("""
-        SELECT COUNT(*) FROM daily_sentences_deepseek WHERE date = CURRENT_DATE AND user_id = %s;
+        SELECT COUNT(*) FROM deutsch_daily_sentences WHERE date = CURRENT_DATE AND user_id = %s;
     """, (user_id,))
     last_index = cursor.fetchone()[0]
 
@@ -625,7 +655,7 @@ async def letsgo(update: Update, context: CallbackContext):
         # ✅ Проверяем, есть ли уже предложение с таким текстом
         cursor.execute("""
             SELECT id_for_mistake_table
-            FROM daily_sentences_deepseek
+            FROM deutsch_daily_sentences
             WHERE sentence = %s
             LIMIT 1;
         """, (sentence, ))
@@ -637,7 +667,7 @@ async def letsgo(update: Update, context: CallbackContext):
         else:
             # ✅ Если текста нет — получаем максимальный ID и создаём новый
             cursor.execute("""
-                SELECT MAX(id_for_mistake_table) FROM daily_sentences_deepseek;
+                SELECT MAX(id_for_mistake_table) FROM deutsch_daily_sentences;
             """)
             result = cursor.fetchone()
             max_id = result[0] if result and result[0] is not None else 0
@@ -646,7 +676,7 @@ async def letsgo(update: Update, context: CallbackContext):
 
         # ✅ Вставляем предложение в таблицу с id_for_mistake_table
         cursor.execute("""
-            INSERT INTO daily_sentences_deepseek (date, sentence, unique_id, user_id, session_id, id_for_mistake_table)
+            INSERT INTO deutsch_daily_sentences (date, sentence, unique_id, user_id, session_id, id_for_mistake_table)
             VALUES (CURRENT_DATE, %s, %s, %s, %s, %s);
         """, (sentence, i, user_id, session_id, id_for_mistake_table))
         
@@ -671,13 +701,16 @@ async def letsgo(update: Update, context: CallbackContext):
     "✏️ Отправьте ваши переводы в формате:\n1. Mein Name ist Konchita.\n\n"
     )
 
-    await context.bot.send_message(chat_id=update.message.chat_id, text=text)
+    msg_3 = await context.bot.send_message(chat_id=update.message.chat_id, text=text)
+    add_service_msg_id(context, msg_3.message_id)
 
-    await update.message.reply_text(
+    msg_4 = await update.message.reply_text(
         f"{user.first_name}, Ваши предложения:\n{task_text}\n\n"
         #"После того как вы отправите все переводы, нажмите **'📜 Проверить перевод'**, чтобы проверить их.\n"
         #"Когда все переводы будут проверены, нажмите **'✅ Завершить перевод'**, чтобы зафиксировать время!"
     )
+    add_service_msg_id(context, msg_4.message_id)
+
 
 
 # 🔹 **Функция, которая запоминает переводы, но не проверяет их**
@@ -703,20 +736,42 @@ async def handle_user_message(update: Update, context: CallbackContext):
             context.user_data["pending_translations"].append(full_translation)
             logging.info(f"📝 Добавлен перевод: {full_translation}")
 
-        await update.message.reply_text(
+        msg = await update.message.reply_text(
             "✅ Ваш перевод сохранён.\n\n"
             "Когда будете готовы, нажмите:\n"
             "📜 Проверить перевод.\n\n"
             "✅ Завершить перевод чтобы зафиксировать время.\n"
             )
+        add_service_msg_id(context, msg.message_id)
     else:
         await handle_button_click(update, context)
 
+
+async def delete_message_with_retry(bot, chat_id, message_id, retries=3, delay=2):
+    for attempt in range(retries):
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+            print(f"DEBUG: Успешно удалено сообщение {message_id}")
+            return
+        except TimedOut as e:
+            print(f"❌ Таймаут при удалении сообщения {message_id} (попытка {attempt + 1}/{retries}): {e}")
+            if attempt < retries - 1:
+                await asyncio.sleep(delay)
+        except BadRequest as e:
+            print(f"❌ Ошибка Telegram при удалении сообщения {message_id}: {e}")
+            return  # Сообщение не существует или уже удалено
+        except Exception as e:
+            print(f"❌ Неизвестная ошибка при удалении сообщения {message_id}: {e}")
+            return
+    print(f"❌ Не удалось удалить сообщение {message_id} после {retries} попыток")
 
 
 async def done(update: Update, context: CallbackContext):
     user = update.message.from_user
     user_id = user.id
+
+    message_ids = context.user_data.get("service_message_ids", []).copy()  # Создаём копию списка
+    print(f"DEBUG: message_ids перед удалением: {message_ids}")    
 
     # # ✅ Даём 5 секунд на завершение записи переводов в базу данных
     # logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
@@ -728,7 +783,7 @@ async def done(update: Update, context: CallbackContext):
     # 🔹 Проверяем, есть ли у пользователя активная сессия
     cursor.execute("""
         SELECT session_id
-        FROM user_progress_deepseek 
+        FROM deutsch_user_progress 
         WHERE user_id = %s AND completed = FALSE
         ORDER BY start_time DESC
         LIMIT 1;""", 
@@ -736,7 +791,8 @@ async def done(update: Update, context: CallbackContext):
     session = cursor.fetchone()
 
     if not session:
-        await update.message.reply_text("❌ У вас нет активных сессий! Используйте кнопки: '📌 Выбрать тему' -> '🚀 Начать перевод' чтобы начать.")
+        msg_1 = await update.message.reply_text("❌ У вас нет активных сессий! Используйте кнопки: '📌 Выбрать тему' -> '🚀 Начать перевод' чтобы начать.")
+        add_service_msg_id(context, msg_1.message_id)
         cursor.close()
         conn.close()
         return
@@ -744,7 +800,7 @@ async def done(update: Update, context: CallbackContext):
 
     # 📊 Получаем общее количество предложений
     cursor.execute("""
-        SELECT COUNT(*) FROM daily_sentences_deepseek 
+        SELECT COUNT(*) FROM deutsch_daily_sentences 
         WHERE user_id = %s AND session_id = %s;
         """, (user_id, session_id))
     
@@ -755,7 +811,7 @@ async def done(update: Update, context: CallbackContext):
     max_retries = 120
     for i in range(0, max_retries, 5):
         cursor.execute("""
-            SELECT COUNT(*) FROM translations_deepseek
+            SELECT COUNT(*) FROM deutsch_translations
             WHERE user_id = %s AND session_id = %s; 
             """, (user_id, session_id))
         translated_count = cursor.fetchone()[0]
@@ -770,7 +826,7 @@ async def done(update: Update, context: CallbackContext):
 
     # ✅ Позволяем пользователю всегда завершать сессию вручную
     cursor.execute("""
-        UPDATE user_progress_deepseek
+        UPDATE deutsch_user_progress
         SET end_time = NOW(), completed = TRUE
         WHERE user_id = %s AND completed = FALSE;""",
         (user_id, ))
@@ -779,24 +835,38 @@ async def done(update: Update, context: CallbackContext):
 
     # 🔹 Проверяем, все ли предложения переведены. Выполнили уже выше проверку.
     # cursor.execute("""
-    #     SELECT COUNT(*) FROM daily_sentences_deepseek
+    #     SELECT COUNT(*) FROM deutsch_daily_sentences
     #     WHERE user_id = %s AND session_id = %s;
     # """, (user_id, session_id))
     # total_sentences = cursor.fetchone()[0]
 
     cursor.execute("""
-        SELECT COUNT(*) FROM translations_deepseek
+        SELECT COUNT(*) FROM deutsch_translations
         WHERE user_id = %s AND session_id = %s;
         """,(user_id, session_id))
     final_translated_count = cursor.fetchone()[0]
+    
+    # получаем все id Служебных сообщений которые мы собирали в словарь под ключом service_message_ids для их удаления
+    print(f"DEBUG: message_ids перед удалением: {message_ids}")
 
     if final_translated_count < total_sentences:
-        await update.message.reply_text(
+        msg_2 = await update.message.reply_text(
             f"⚠️ Вы перевели {final_translated_count} из {total_sentences} предложений.\n"
             "Перевод завершён, но не все предложения переведены! Это повлияет на ваш итоговый балл."           
         )
+        
     else:
-        await update.message.reply_text("✅ **Вы успешно завершили перевод! Все предложения этой сессии переведены.**")
+        msg_2 = await update.message.reply_text("✅ **Вы успешно завершили перевод! Все предложения этой сессии переведены.**")
+    
+    add_service_msg_id(context, msg_2.message_id)
+    await asyncio.sleep(15)
+
+    print(f"DEBUG: Удаляем сообщения: {message_ids}")
+    for message_id in message_ids:
+        await delete_message_with_retry(context.bot, update.effective_chat.id, message_id)
+
+    print(f"DEBUG: Сбрасываем service_message_ids. Текущий список: {context.user_data['service_message_ids']}")
+    context.user_data["service_message_ids"] = []
 
     cursor.close()
     conn.close()
@@ -819,6 +889,12 @@ def correct_numbering(sentences):
 async def choose_topic(update: Update, context: CallbackContext):
     print("🔹 Функция choose_topic() вызвана!")  # 👈 Логируем вызов
     global TOPICS
+    
+    context.user_data.setdefault("service_message_ids", [])
+
+    message_ids = context.user_data.get("service_message_ids", [])
+    print(f"DEBUG: message_ids in choose_topic function: {message_ids}")
+    
     buttons = [[InlineKeyboardButton(topic, callback_data=topic)] for topic in TOPICS]
     #example of buttons
     #[
@@ -829,9 +905,11 @@ async def choose_topic(update: Update, context: CallbackContext):
     reply_markup = InlineKeyboardMarkup(buttons)
 
     if update.callback_query:
-        await update.callback_query.message.edit_text("📌 Выберите тему для предложений:", reply_markup=reply_markup)
+        msg = await update.callback_query.message.edit_text("📌 Выберите тему для предложений:", reply_markup=reply_markup)
+        add_service_msg_id(context, msg.message_id)
     else:
-        await update.message.reply_text("📌 Выберите тему для предложений:", reply_markup=reply_markup) #Отправляем сообщение пользователю с прикреплёнными кнопками.
+        msg_1 = await update.message.reply_text("📌 Выберите тему для предложений:", reply_markup=reply_markup) #Отправляем сообщение пользователю с прикреплёнными кнопками.
+        add_service_msg_id(context, msg_1.message_id)
 
 
 
@@ -849,7 +927,8 @@ async def topic_selected(update: Update, context: CallbackContext):
     logging.info(f"✅ Пользователь выбрал тему: {chosen_topic}")
 
     context.user_data["chosen_topic"] = chosen_topic  # Store it in user data: # Сохраняем выбранную тему в памяти пользователя
-    await query.message.reply_text(f"✅ Вы выбрали тему: {chosen_topic}.\nТеперь нажмите '🚀 Начать перевод'.")
+    msg_1 = await query.message.reply_text(f"✅ Вы выбрали тему: {chosen_topic}.\nТеперь нажмите '🚀 Начать перевод'.")
+    add_service_msg_id(context, msg_1.message_id)
 
 
 
@@ -950,7 +1029,7 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
     cursor = conn.cursor()
     
     cursor.execute("""
-        SELECT sentence FROM spare_sentences_deepseek ORDER BY RANDOM() LIMIT 7;""")
+        SELECT sentence FROM deutsch_spare_sentences ORDER BY RANDOM() LIMIT 7;""")
     spare_rows = cursor.fetchall()
 
     cursor.close()
@@ -964,7 +1043,13 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
 
 
 async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
-    client = openai.AsyncOpenAI(api_key=openai.api_key)
+    client = openai.AsyncOpenAI(api_key=openai.api_key, timeout=60)
+    
+    # Initialize variables with default values at the beginning of the function
+    score = "50"  # Default score
+    categories = []
+    subcategories = []
+    correct_translation = "there is no information."  # Default translation
     
     # ✅ Показываем сообщение о начале проверки
     message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Ну, глянем что ты тут напереводил...")
@@ -988,7 +1073,7 @@ async def check_translation(original_text, user_translation, update: Update, con
         - 16–30 points: major grammar or vocabulary errors that affect understanding.
         - 31–50 points: multiple severe mistakes or misunderstanding of key parts.
         - 51–100 points: completely wrong meaning or incomprehensible translation.
-    - Do NOT assign a score of 0 unless the translation is completely unrelated or empty. 
+    - Do NOT assign a score of 0 unless the translation is completely unrelated or empty.
 
     2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
     - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
@@ -1007,43 +1092,27 @@ async def check_translation(original_text, user_translation, update: Update, con
     - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
     - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
 
-    4. **Provide a severity level from 1 to 5** where:  
-    - 1 = Minor stylistic error  
-    - 2 = Common mistake  
-    - 3 = Noticeable grammatical issue  
-    - 4 = Severe grammatical mistake  
-    - 5 = Critical mistake that changes the meaning  
-
-    5. **Provide the correct translation.**  
+    4. **Provide the correct translation.**  
 
     ---
 
     **Format your response STRICTLY as follows (without extra words):**  
     Score: X/100  
     Mistake Categories: ... (if there are multiple categories, return them as a comma separated string)  
-    Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)  
-    Severity: ...  
+    Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)   
     Correct Translation: ...  
 
         """
 
-
-    # collected_text = ""
-    # last_update_time = asyncio.get_running_loop().time()
-    # finished = False
-# Переменные для хранения результата
-    score = None
-    categories = []
-    subcategories = []
-    severity = None
-    correct_translation = None
-
     for attempt in range(3):
         try:
+            start_time = asyncio.get_running_loop().time()
             response = await client.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
+            end_time = asyncio.get_running_loop().time()
+            print(f"⏱ Время выполнения запроса: {end_time - start_time} секунд")
 
             # async for chunk in stream_response:
             #     if finished:
@@ -1082,7 +1151,7 @@ async def check_translation(original_text, user_translation, update: Update, con
             categories = collected_text.split("Mistake Categories: ")[-1].split("\n")[0].split(", ") if "Mistake Categories:" in collected_text else []
             subcategories = collected_text.split("Subcategories: ")[-1].split("\n")[0].split(", ") if "Subcategories:" in collected_text else []
 
-            severity = collected_text.split("Severity: ")[-1].split("\n")[0].strip() if "Severity:" in collected_text and len(collected_text.split("Severity: ")[-1].split("\n")) > 0 else None
+            #severity = collected_text.split("Severity: ")[-1].split("\n")[0].strip() if "Severity:" in collected_text and len(collected_text.split("Severity: ")[-1].split("\n")) > 0 else None
             correct_translation = collected_text.split("Correct Translation: ")[-1].strip() if "Correct Translation:" in collected_text else None
             
             # ✅ Логируем До обработки
@@ -1108,7 +1177,7 @@ async def check_translation(original_text, user_translation, update: Update, con
             if not subcategories:
                 print(f"⚠️ Подкатегории отсутствуют в ответе GPT")
 
-            if score_str and severity and correct_translation:
+            if score_str and correct_translation:
                 score = score_str
                 print(f"✅ Успешно получены все обязательные данные на попытке {attempt + 1}")
                 break
@@ -1117,11 +1186,15 @@ async def check_translation(original_text, user_translation, update: Update, con
                 missing_fields = []
                 if not score_str:
                     missing_fields.append("Score")
-                if not severity:
-                    missing_fields.append("Severity")
+                #if not severity:
+                #    missing_fields.append("Severity")
                 if not correct_translation:
                     missing_fields.append("Correct Translation")
                 print(f"⚠️ Не получены обязательные поля: {', '.join(missing_fields)}. Повторяем запрос...")
+                raise ValueError(f"Missing required fields: "
+                     f"{'Score' if not score_str else ''} "
+                     f"{'Correct Translation' if not correct_translation else ''}")
+
 
         except openai.RateLimitError:
             wait_time = (attempt + 1) * 5
@@ -1134,20 +1207,6 @@ async def check_translation(original_text, user_translation, update: Update, con
             await asyncio.sleep(5)
 
 
-    # Если после всех попыток данные не получены, задаём значения по умолчанию
-    if score is None:
-        score = "0"
-        print("❌ После всех попыток Score не получен. Устанавливаем 0.")
-    if severity is None:
-        severity = "3"
-        print("❌ После всех попыток Severity не получен. Устанавливаем 3.")
-    if correct_translation is None:
-        correct_translation = user_translation  # Используем перевод пользователя как заглушку
-        print("❌ После всех попыток Correct Translation не получен. Используем перевод пользователя.")
-
-
-
-
     # ✅ Убираем лишние пробелы для ровного форматирования
     result_text = f"""
 🟢 Sentence number: {str(sentence_number)}\n
@@ -1155,7 +1214,6 @@ async def check_translation(original_text, user_translation, update: Update, con
 🔵 Original Sentence: {escape_markdown(original_text)}\n
 🟡 User Translation: {escape_markdown(user_translation)}\n
 🟣 Correct Translation: {escape_markdown(correct_translation)}\n
-📌 Mistake Severity: {str(severity) or "0"}
 """
 #             # ✅ Убираем лишние пробелы для ровного форматирования
 #             result_text = f"""
@@ -1209,7 +1267,7 @@ async def check_translation(original_text, user_translation, update: Update, con
     # ✅ Логируем успешную проверку
     logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
 
-    return result_text, categories, subcategories, score, severity, correct_translation
+    return result_text, categories, subcategories, score, correct_translation
 
 # except TelegramError as e:
 #     if 'flood control' in str(e).lower():
@@ -1259,7 +1317,8 @@ async def handle_explain_request(update: Update, context: CallbackContext):
         data = context.user_data.get(f"translation_{message_id}")
         if not data:
             logging.error(f"❌ Данные для message_id {message_id} не найдены в context.user_data!")
-            await query.message.reply_text("❌ Данные перевода не найдены!")
+            msg = await query.message.reply_text("❌ Данные перевода не найдены!")
+            add_service_msg_id(context, msg.message_id)
             return       
 
         # ✅ Получаем текст оригинала и перевода
@@ -1269,7 +1328,8 @@ async def handle_explain_request(update: Update, context: CallbackContext):
         explanation = await check_translation_with_claude(original_text, user_translation, update, context)
         if not explanation:
             logging.error("❌ Не удалось получить объяснение от Claude!")
-            await query.message.reply_text("❌ Не удалось получить объяснение!")
+            msg_1 = await query.message.reply_text("❌ Не удалось получить объяснение!")
+            add_service_msg_id(context, msg_1.message_id)
             return          
       
         # ✅ Логируем попытку отправки комментария
@@ -1457,7 +1517,7 @@ async def check_translation_with_claude(original_text, user_translation, update,
 
 
 
-async def log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, severity, correct_translation):
+async def log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, correct_translation):
     global VALID_CATEGORIES, VALID_SUBCATEGORIES, VALID_CATEGORIES_lower, VALID_SUBCATEGORIES_lower
     #client = anthropic.Client(api_key=CLAUDE_API_KEY)
 
@@ -1493,7 +1553,7 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
 
 
     # ✅ Извлекаем уровень серьёзности ошибки (по умолчанию ставим 3)
-    severity = int(severity) if severity else 3
+    #severity = int(severity) if severity else 3
 
     # ✅ Проверка на идеальный перевод
     score = int(score) if score else 0
@@ -1521,8 +1581,8 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
 
         print(f"🔍 Перед записью в БД: main_category = {main_category} | sub_category = {sub_category}")
 
-        if not isinstance(user_id, int) or not isinstance(severity, int):
-            print(f"❌ Ошибка типа данных: user_id = {type(user_id)}, severity = {type(severity)}")
+        if not isinstance(user_id, int):
+            print(f"❌ Ошибка типа данных: user_id = {type(user_id)}")
             return
 
         if not isinstance(main_category, str) or not isinstance(sub_category, str):
@@ -1537,12 +1597,12 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
                     # ✅ Получаем id_for_mistake_table
                     cursor.execute("""
                     SELECT id_for_mistake_table 
-                    FROM daily_sentences_deepseek
+                    FROM deutsch_daily_sentences
                     WHERE sentence=%s
                     LIMIT 1;
                 """, (original_text, )
                     )
-                    #sentence_id В нашем случае это идентификатор id_for_mistake_table Из таблицы daily_sentences_deepseek (для одинаковых предложений он одинаков) Для разных он разный.
+                    #sentence_id В нашем случае это идентификатор id_for_mistake_table Из таблицы deutsch_daily_sentences (для одинаковых предложений он одинаков) Для разных он разный.
                     # это нужно чтобы правильно Помечать предложения особенно одинаковые предложения и потом их правильно удалять из базы данных на основании этого идентификатора
                     result = cursor.fetchone()
                     sentence_id = result[0] if result else None
@@ -1554,14 +1614,14 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
                     
                     # ✅ Вставляем в таблицу ошибок с использованием общего идентификатора
                     cursor.execute("""
-                        INSERT INTO detailed_mistakes_deepseek (
-                            user_id, sentence, added_data, main_category, sub_category, severity, mistake_count, sentence_id
-                        ) VALUES (%s, %s, NOW(), %s, %s, %s, 1, %s)
+                        INSERT INTO deutsch_detailed_mistakes (
+                            user_id, sentence, added_data, main_category, sub_category, mistake_count, sentence_id, correct_translation
+                        ) VALUES (%s, %s, NOW(), %s, %s, 1, %s, %s)
                         ON CONFLICT (user_id, sentence, main_category, sub_category)
                         DO UPDATE SET
-                            mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
+                            mistake_count = deutsch_detailed_mistakes.mistake_count + 1,
                             last_seen = NOW();
-                    """, (user_id, original_text, main_category, sub_category, severity, sentence_id)
+                    """, (user_id, original_text, main_category, sub_category, sentence_id, correct_translation)
                     )
                     
                     conn.commit()
@@ -1596,7 +1656,8 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
     print(f"✅ Извлечено {len(translations)} переводов: {translations}")
 
     if not translations:
-        await update.message.reply_text("❌ Ошибка: Формат перевода неверен. Должно быть: 1. <перевод>")
+        msg_2 = await update.message.reply_text("❌ Ошибка: Формат перевода неверен. Должно быть: 1. <перевод>")
+        add_service_msg_id(context, msg_2.message_id)
         return
 
     # Получаем ID пользователя
@@ -1609,7 +1670,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
     # Получаем разрешённые номера предложений
     cursor.execute("""
-        SELECT unique_id FROM daily_sentences_deepseek WHERE date = CURRENT_DATE AND user_id = %s
+        SELECT unique_id FROM deutsch_daily_sentences WHERE date = CURRENT_DATE AND user_id = %s
     """, (user_id,))
     
     allowed_sentences = {row[0] for row in cursor.fetchall()}  # Собираем в set() для быстрого поиска
@@ -1628,7 +1689,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             # Получаем оригинальный текст предложения
             cursor.execute("""
-                SELECT id, sentence, session_id, id_for_mistake_table FROM daily_sentences_deepseek 
+                SELECT id, sentence, session_id, id_for_mistake_table FROM deutsch_daily_sentences 
                 WHERE date = CURRENT_DATE AND unique_id = %s AND user_id = %s;
             """, (sentence_number, user_id))
 
@@ -1642,7 +1703,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             # Проверяем, отправлял ли этот пользователь перевод этого предложения
             cursor.execute("""
-                SELECT id FROM translations_deepseek 
+                SELECT id FROM deutsch_translations 
                 WHERE user_id = %s AND sentence_id = %s AND timestamp::date = CURRENT_DATE;
             """, (user_id, sentence_id))
 
@@ -1657,13 +1718,14 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
             MAX_FEEDBACK_LENGTH = 1000  # Ограничим длину комментария GPT
 
             try:
-                feedback, categories, subcategories, score, severity, correct_translation = await check_translation(original_text, user_translation, update, context, sentence_number)
+                feedback, categories, subcategories, score, correct_translation = await check_translation(original_text, user_translation, update, context, sentence_number)
 
             except Exception as e:
                 print(f"⚠️ Ошибка при проверке перевода №{sentence_number}: {e}")
+                logging.error(f"⚠️ Ошибка при проверке перевода №{sentence_number}: {e}", exc_info=True)
                 feedback = "⚠️ Ошибка: не удалось проверить перевод."
 
-            score = int(score) if score else 0
+            score = int(score) if score else 50
 
             # Обрезаем, если слишком длинный
             if len(feedback) > MAX_FEEDBACK_LENGTH:
@@ -1674,27 +1736,27 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             # ✅ Сохраняем перевод в базу данных с защитой от ошибок
             cursor.execute("""
-                INSERT INTO translations_deepseek (user_id, session_id, username, sentence_id, user_translation, score, feedback)
+                INSERT INTO deutsch_translations (user_id, session_id, username, sentence_id, user_translation, score, feedback)
                 VALUES (%s, %s, %s, %s, %s, %s, %s);
             """, (user_id, session_id, username, sentence_id, user_translation, score, feedback))
 
             conn.commit()
 
-            #deleting sentences from detailed_mistakes_deepseek if score is 90 or more
-            if score >= 90 and id_for_mistake_table:
+            #deleting sentences from deutsch_detailed_mistakes if score is 90 or more
+            if score >= 85 and id_for_mistake_table:
                 try:
                     # ✅ Проверяем, существует ли предложение с таким sentence_id
                     cursor.execute("""
-                        SELECT COUNT(*) FROM detailed_mistakes_deepseek
+                        SELECT COUNT(*) FROM deutsch_detailed_mistakes
                         WHERE sentence_id = %s;
                     """, (id_for_mistake_table, ))
 
                     result = cursor.fetchone()
                     if result and result[0] > 0:
-                        logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 90.")
+                        logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 85.")
                         # ✅ Удаляем все ошибки, связанные с данным предложением
                         cursor.execute("""
-                            DELETE FROM detailed_mistakes_deepseek
+                            DELETE FROM deutsch_detailed_mistakes
                             WHERE sentence_id = %s;
                             """, (id_for_mistake_table, ))
                         conn.commit()
@@ -1715,10 +1777,10 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
             
             # ✅ Если оценка < 75 → только тогда сохраняем в базу
             try:
-                await log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, severity, correct_translation)
+                await log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, correct_translation)
             
             except Exception as e:
-                print(f"⚠️ Ошибка при записи ошибки в detailed_mistakes_deepseek: {e}")
+                print(f"⚠️ Ошибка при записи ошибки в deutsch_detailed_mistakes: {e}")
 
         except Exception as e:
             logging.error(f"❌ Ошибка обработки предложения {number_str}: {e}")
@@ -1735,14 +1797,14 @@ async def get_original_sentences(user_id, context: CallbackContext):
     try:
     
         # Выполняем SQL-запрос: выбираем 1 случайных предложений из базы данных в которую мы предварительно поместили предложение
-        cursor.execute("SELECT sentence FROM sentences_deepseek ORDER BY RANDOM() LIMIT 1;")
+        cursor.execute("SELECT sentence FROM deutsch_sentences ORDER BY RANDOM() LIMIT 1;")
         rows = [row[0] for row in cursor.fetchall()]   # Возвращаем список предложений
         print(f"📌 Найдено в базе данных: {rows}") # ✅ Логируем результат
 
         # ✅ Загружаем все предложения из базы ошибок
         cursor.execute("""
             SELECT sentence, sentence_id
-            FROM detailed_mistakes_deepseek
+            FROM deutsch_detailed_mistakes
             WHERE user_id = %s
             ORDER BY mistake_count DESC, last_seen ASC; 
         """, (user_id, ))
@@ -1912,7 +1974,7 @@ async def rate_mistakes(user_id):
             # we calculate amount of translated sentences of the user in a week 
             cursor.execute("""
                 SELECT COUNT(sentence_id) 
-                FROM translations_deepseek 
+                FROM deutsch_translations 
                 WHERE user_id = %s AND timestamp >= NOW() - INTERVAL '6 days'; 
             """, (user_id,))
             total_sentences = cursor.fetchone()
@@ -1922,13 +1984,13 @@ async def rate_mistakes(user_id):
             cursor.execute("""
                 WITH user_mistakes AS (
                     SELECT COUNT(*) AS mistakes_week
-                    FROM detailed_mistakes_deepseek
+                    FROM deutsch_detailed_mistakes
                     WHERE user_id = %s
                     AND added_data >= NOW() - INTERVAL '6 days'
                 ),
                 top_category AS (
                     SELECT main_category
-                    FROM detailed_mistakes_deepseek
+                    FROM deutsch_detailed_mistakes
                     WHERE user_id = %s
                     AND added_data >= NOW() - INTERVAL '6 days'
                     GROUP BY main_category
@@ -1937,7 +1999,7 @@ async def rate_mistakes(user_id):
                 ),
                 number_of_topcategory_mist AS (
                     SELECT main_category, COUNT(*) AS number_of_top_category_mistakes
-                    FROM detailed_mistakes_deepseek
+                    FROM deutsch_detailed_mistakes
                     WHERE user_id = %s
                     AND added_data >= NOW() - INTERVAL '6 days'
                     AND main_category = (SELECT main_category FROM top_category)
@@ -1949,7 +2011,7 @@ async def rate_mistakes(user_id):
                     SELECT sub_category, 
                         COUNT(*) AS count,
                         ROW_NUMBER() OVER (ORDER BY COUNT(*) DESC) AS subcategory_rank
-                    FROM detailed_mistakes_deepseek 
+                    FROM deutsch_detailed_mistakes 
                     WHERE user_id = %s
                     AND added_data >= NOW() - INTERVAL '6 days'
                     AND main_category = (SELECT main_category FROM top_category)
@@ -2014,7 +2076,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
             cursor.execute("""
-            SELECT DISTINCT user_id FROM detailed_mistakes_deepseek;
+            SELECT DISTINCT user_id FROM deutsch_detailed_mistakes;
             """)
             user_ids = cursor.fetchall()
     if not user_ids:
@@ -2027,7 +2089,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
             with get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;""",
+                        SELECT DISTINCT username FROM deutsch_translations WHERE user_id = %s;""",
                         (user_id, ))
 
                     result = cursor.fetchone()
@@ -2120,7 +2182,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
             with get_db_connection() as conn:
                 with conn.cursor() as cursor:
                     cursor.execute("""
-                        SELECT DISTINCT username FROM translations_deepseek WHERE user_id = %s;
+                        SELECT DISTINCT username FROM deutsch_translations WHERE user_id = %s;
                     """, (user_id, ))
                     result = cursor.fetchone()
                     username = result[0] if result else f"User {user_id}"
@@ -2138,7 +2200,7 @@ async def force_finalize_sessions(context: CallbackContext = None):
     cursor = conn.cursor()
 
     cursor.execute("""
-        UPDATE user_progress_deepseek 
+        UPDATE deutsch_user_progress 
         SET end_time = NOW(), completed = TRUE
         WHERE completed = FALSE AND start_time::date = CURRENT_DATE;
     """)
@@ -2147,7 +2209,8 @@ async def force_finalize_sessions(context: CallbackContext = None):
     cursor.close()
     conn.close()
 
-    await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="🔔 **Все незавершённые сессии за сегодня автоматически закрыты!**")
+    msg = await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="🔔 **Все незавершённые сессии за сегодня автоматически закрыты!**")
+    add_service_msg_id(context, msg.message_id)
 
 
 
@@ -2166,24 +2229,24 @@ async def send_weekly_summary(context: CallbackContext):
         COALESCE(p.avg_time, 0) AS среднее_время_сессии_в_минутах, -- ✅ Среднее время сессии
         COALESCE(p.total_time, 0) AS общее_время_в_минутах, -- ✅ Теперь есть и общее время
         (SELECT COUNT(*) 
-        FROM daily_sentences_deepseek 
+        FROM deutsch_daily_sentences 
         WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
         AND user_id = t.user_id) 
         - COUNT(DISTINCT t.sentence_id) AS пропущено_за_неделю,
         COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 2) -- ✅ Среднее время в штрафе
             - ((SELECT COUNT(*) 
-                FROM daily_sentences_deepseek 
+                FROM deutsch_daily_sentences 
                 WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
                 AND user_id = t.user_id) 
             - COUNT(DISTINCT t.sentence_id)) * 20
             AS итоговый_балл
-    FROM translations_deepseek t
+    FROM deutsch_translations t
     LEFT JOIN (
         SELECT user_id, 
             AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, -- ✅ Среднее время сессии
             SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time -- ✅ Общее время
-        FROM user_progress_deepseek 
+        FROM deutsch_user_progress 
         WHERE completed = TRUE 
         AND start_time >= CURRENT_DATE - INTERVAL '6 days'
         GROUP BY user_id
@@ -2235,24 +2298,24 @@ async def user_stats(update: Update, context: CallbackContext):
             COALESCE(AVG(t.score), 0) AS средняя_оценка,
             COALESCE((
                 SELECT AVG(EXTRACT(EPOCH FROM (p.end_time - p.start_time)) / 60)  -- ✅ Используем AVG вместо SUM
-                FROM user_progress_deepseek p
+                FROM deutsch_user_progress p
                 WHERE p.user_id = t.user_id 
                     AND p.start_time::date = CURRENT_DATE
                     AND p.completed = TRUE
             ), 0) AS среднее_время_сессии_в_минутах,  -- ✅ Обновили название, чтобы было понятно
-            GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek 
+            GREATEST(0, (SELECT COUNT(*) FROM deutsch_daily_sentences 
                         WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) AS пропущено,
             COALESCE(AVG(t.score), 0) 
                 - (COALESCE((
                     SELECT AVG(EXTRACT(EPOCH FROM (p.end_time - p.start_time)) / 60)  -- ✅ Здесь тоже AVG
-                    FROM user_progress_deepseek p
+                    FROM deutsch_user_progress p
                     WHERE p.user_id = t.user_id 
                         AND p.start_time::date = CURRENT_DATE
                         AND p.completed = TRUE
                 ), 0) * 2) 
-                - (GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek
+                - (GREATEST(0, (SELECT COUNT(*) FROM deutsch_daily_sentences
                                 WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
-        FROM translations_deepseek t
+        FROM deutsch_translations t
         WHERE t.user_id = %s AND t.timestamp::date = CURRENT_DATE
         GROUP BY t.user_id;
     """, (user_id,))
@@ -2271,21 +2334,21 @@ async def user_stats(update: Update, context: CallbackContext):
             COALESCE(AVG(t.score), 0) 
                 - (COALESCE(p.avg_session_time, 0) * 2)  
                 - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
-        FROM translations_deepseek t
+        FROM deutsch_translations t
         LEFT JOIN (
             -- ✅ Отдельный подзапрос для корректного расчёта времени по каждому пользователю
             SELECT 
                 user_id, 
                 AVG(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) AS avg_session_time, 
                 SUM(EXTRACT(EPOCH FROM (end_time - start_time)) / 60) AS total_time 
-            FROM user_progress_deepseek
+            FROM deutsch_user_progress
             WHERE completed = TRUE 
                 AND start_time >= CURRENT_DATE - INTERVAL '6 days'
             GROUP BY user_id
         ) p ON t.user_id = p.user_id
         LEFT JOIN (
             SELECT user_id, COUNT(*) AS total_sentences
-            FROM daily_sentences_deepseek
+            FROM deutsch_daily_sentences
             WHERE date >= CURRENT_DATE - INTERVAL '6 days'
             GROUP BY user_id
         ) ds ON t.user_id = ds.user_id
@@ -2337,7 +2400,7 @@ async def send_daily_summary(context: CallbackContext):
     # 🔹 Собираем активных пользователей (кто перевёл хотя бы одно предложение)
     cursor.execute("""
         SELECT DISTINCT user_id, username 
-        FROM translations_deepseek
+        FROM deutsch_translations
         WHERE timestamp::date = CURRENT_DATE;
     """)
     active_users = {row[0]: row[1] for row in cursor.fetchall()}
@@ -2345,7 +2408,7 @@ async def send_daily_summary(context: CallbackContext):
     # 🔹 Собираем всех, кто хоть что-то писал в чат
     cursor.execute("""
         SELECT DISTINCT user_id, username
-        FROM messages_deepseek
+        FROM deutsch_messages
         WHERE timestamp >= date_trunc('month', CURRENT_DATE);
     """)
     all_users = {row[0]: row[1] for row in cursor.fetchall()}
@@ -2365,13 +2428,13 @@ async def send_daily_summary(context: CallbackContext):
             COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 2) 
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS final_score
-        FROM daily_sentences_deepseek ds
-        LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
+        FROM deutsch_daily_sentences ds
+        LEFT JOIN deutsch_translations t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
         LEFT JOIN (
             SELECT user_id, 
                 AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, 
                 SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time
-            FROM user_progress_deepseek
+            FROM deutsch_user_progress
             WHERE completed = true
         		AND start_time::date = CURRENT_DATE -- ✅ Теперь только за день
             GROUP BY user_id
@@ -2425,14 +2488,14 @@ async def send_progress_report(context: CallbackContext):
     # 🔹 Получаем всех пользователей, которые писали в чат **за месяц**
     cursor.execute("""
         SELECT DISTINCT user_id, username 
-        FROM messages_deepseek
+        FROM deutsch_messages
         WHERE timestamp >= date_trunc('month', CURRENT_DATE);
     """)
     all_users = {int(row[0]): row[1] for row in cursor.fetchall()}
 
     # 🔹 Получаем всех, кто перевёл хотя бы одно предложение **за сегодня**
     cursor.execute("""
-        SELECT DISTINCT user_id FROM translations_deepseek WHERE timestamp::date = CURRENT_DATE;
+        SELECT DISTINCT user_id FROM deutsch_translations WHERE timestamp::date = CURRENT_DATE;
     """)
     active_users = {row[0] for row in cursor.fetchall()}
 
@@ -2449,13 +2512,13 @@ async def send_progress_report(context: CallbackContext):
         COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 2) -- ✅ Используем среднее время в расчётах
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS итоговый_балл
-    FROM daily_sentences_deepseek ds
-    LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
+    FROM deutsch_daily_sentences ds
+    LEFT JOIN deutsch_translations t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
     LEFT JOIN (
         SELECT user_id, 
             AVG(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS avg_time, -- ✅ Среднее время сессии за день
             SUM(EXTRACT(EPOCH FROM (end_time - start_time))/60) AS total_time -- ✅ Общее время за день
-        FROM user_progress_deepseek
+        FROM deutsch_user_progress
         WHERE completed = TRUE 
             AND start_time::date = CURRENT_DATE -- ✅ Теперь только за день
         GROUP BY user_id
@@ -2497,26 +2560,209 @@ async def send_progress_report(context: CallbackContext):
     await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text=progress_report)
 
 
-
-
-
-
 async def error_handler(update, context):
     logging.error(f"❌ Ошибка в обработчике Telegram: {context.error}")
+
+
+# Глобальная переменная
+GOOGLE_CREDS_FILE_PATH = None
+
+# ✅ # ✅ Загружаем переменные окружения из .env-файла (только при локальной разработке)
+# Это загрузит все переменные из file with name .env which was created by me в os.environ
+from dotenv import load_dotenv
+load_dotenv()
+
+def prepare_google_creds_file():
+    global GOOGLE_CREDS_FILE_PATH
+
+    # ✅ 1. Попробовать использовать путь к локальному .json-файлу
+    direct_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
+    if direct_path and Path(direct_path).exists():
+        print(f"📂 Используем локальный ключ: {direct_path}")
+        GOOGLE_CREDS_FILE_PATH = direct_path
+        return GOOGLE_CREDS_FILE_PATH
+    
+    # ✅ 2. Попробовать использовать GOOGLE_CREDS_JSON (из Railway)
+    if GOOGLE_CREDS_FILE_PATH and Path(GOOGLE_CREDS_FILE_PATH).exists():
+        return GOOGLE_CREDS_FILE_PATH
+    
+    raw_creds = os.getenv("GOOGLE_CREDS_JSON")
+    if not raw_creds:
+        raise RuntimeError("❌ Не найдены переменные GOOGLE_APPLICATION_CREDENTIALS или GOOGLE_CREDS_JSON.")
+
+    with tempfile.NamedTemporaryFile(mode="w+", delete=False, suffix=".json") as temp_key_file:
+        temp_key_file.write(raw_creds)
+        temp_key_file.flush()
+        # Когда создаё временный файл через tempfile.NamedTemporaryFile, Python возвращает объект этого файла. 
+        # У него есть атрибут .name, который содержит полный путь к этому файлу в файловой системе
+        GOOGLE_CREDS_FILE_PATH = temp_key_file.name
+        print(f"🧪 Сгенерирован временный ключ: {GOOGLE_CREDS_FILE_PATH}")
+
+    return GOOGLE_CREDS_FILE_PATH
+
+
+
+async def mistakes_to_voice(username, sentence_pairs):
+    #global GOOGLE_CREDS_FILE_PATH
+    key_path = prepare_google_creds_file()
+    os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+
+    client = texttospeech.TextToSpeechClient()
+
+    audio_segments = []
+
+    def synthesize(text, language_code, voice_name):
+        input_data = texttospeech.SynthesisInput(text = text)
+
+        voice = texttospeech.VoiceSelectionParams(
+            language_code = language_code, name=voice_name
+        )
+
+        config = texttospeech.AudioConfig(
+            audio_encoding=texttospeech.AudioEncoding.MP3,
+            speaking_rate=0.9 # 90% скорости
+        )
+
+        response = client.synthesize_speech(
+            input=input_data, voice=voice, audio_config=config 
+        )
+
+        return AudioSegment.from_file_using_temporary_files(io.BytesIO(response.audio_content))
+
+    for russian, german in sentence_pairs:
+        print(f"🎤 Синтезируем: {russian} -> {german}")
+        # Русский (один раз)
+        ru_audio = synthesize(russian, "ru-RU", "ru-RU-Wavenet-C")
+        # Немецкий (дважды)
+        de_audio_1 = synthesize(german, "de-DE", "de-DE-Wavenet-B")
+        de_audio_2 = synthesize(german, "de-DE", "de-DE-Wavenet-B")
+
+        # Объединяем
+        combined = ru_audio + de_audio_1 + de_audio_2
+        audio_segments.append(combined)
+
+    final_audio = sum(audio_segments)
+
+    output_path = f"{username}.mp3"
+
+    final_audio.export(output_path, format="mp3")
+    print(f"🔊 Сохранён итоговый файл: {output_path}")
+
+
+async def get_yesterdays_mistakes_for_audio_message(context: CallbackContext):
+    
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+
+            # take all users who made at least one mistake from deutsch_detailed_mistakes table
+            cursor.execute("""
+                SELECT DISTINCT user_id FROM deutsch_detailed_mistakes
+                WHERE added_data >= NOW() - INTERVAL '6 days';
+            """)
+            user_ids = [i[0] for i in cursor.fetchall() if i[0] is not None]
+            print(user_ids)
+            for user_id in user_ids:
+                original_by_id = {}
+
+                cursor.execute("""
+                SELECT username FROM deutsch_user_progress
+                WHERE user_id = %s;
+                """, (user_id,))
+                row = cursor.fetchone()
+                username = row[0] if row and row[0] else f"useer_{user_id}"
+
+                ## Шаг 1 — Собираем оригинальные предложения по user_id
+                # ✅ Загружаем все предложения из базы ошибок
+                cursor.execute("""
+                    SELECT sentence, correct_translation
+                    FROM deutsch_detailed_mistakes
+                    WHERE user_id = %s
+                    ORDER BY mistake_count DESC, last_seen ASC; 
+                """, (user_id, ))
+                
+                # ✅ Используем set() для удаления дубликатов по sentence_id
+                already_given_sentence_translation = set()
+                unique_sentences = set()
+                mistake_sentences = []
+                result_for_audio = []
+                
+                rows = cursor.fetchall()
+                max_to_collect = min(len(rows), 5)
+
+                for sentence, correct_translation in rows:
+                    if sentence and correct_translation and correct_translation not in already_given_sentence_translation and sentence not in mistake_sentences:
+                        if correct_translation not in unique_sentences:
+                            unique_sentences.add(correct_translation)
+                            mistake_sentences.append(sentence)
+                            already_given_sentence_translation.add(correct_translation)
+                            original_by_id[correct_translation] = sentence
+
+                            # ✅ Ограничиваем до нужного количества предложений (например, 5)
+                            
+                            if len(mistake_sentences) == max_to_collect:
+                                break
+
+                sentence_pairs = [(origin_sentence, correct_transl) for correct_transl, origin_sentence in original_by_id.items()]
+                try:
+                    await mistakes_to_voice(username, sentence_pairs)
+                except Exception as e:
+                    print(f"❌ Ошибка синтеза речи для {username}: {e}")
+                    continue
+                audio_path = Path(f"{username}.mp3")
+                print(f"📦 Размер файла: {audio_path.stat().st_size / 1024 / 1024:.2f} MB ")
+
+                if audio_path.exists():
+                    try:
+                        start = asyncio.get_running_loop().time()
+                        with audio_path.open("rb") as audio_file:
+                            await context.bot.send_audio(
+                                chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, 
+                                audio=audio_file,
+                                caption=f"🎧 Ошибки пользователя @{username} за вчерашний день."
+                            )
+                        print(f"⏱ Отправка заняла {asyncio.get_running_loop().time() - start:.2f} секунд")
+                        await asyncio.sleep(5)
+                    except Exception as e:
+                        print(f"❌ Ошибка при отправке аудиофайла для @{username}: {e}")
+
+                    try:    
+                        audio_path.unlink()
+                    except FileNotFoundError:
+                        print(f"⚠️ Файл уже был удалён: {audio_path}")
+                
+                else:
+                    await context.bot.send_message(
+                        chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID,
+                        text=f"❌ Для пользователя @{username} не найден аудиофайл."
+                    )
+                    await asyncio.sleep(5)
+
+
+import atexit
+
+def cleanup_creds_file():
+    global GOOGLE_CREDS_FILE_PATH
+    if GOOGLE_CREDS_FILE_PATH and os.path.exists(GOOGLE_CREDS_FILE_PATH):
+        os.remove(GOOGLE_CREDS_FILE_PATH)
+        print(f"🧹 Удалён временный ключ: {GOOGLE_CREDS_FILE_PATH}")
+
+atexit.register(cleanup_creds_file)
 
 
 
 
 def main():
     global application
+
+    #defaults = Defaults(timeout=60)  # увеличили таймаут до 60 секунд
     application = Application.builder().token(TELEGRAM_DeepSeek_BOT_TOKEN).build()
+    application.bot.request.timeout = 60
 
     # 🔹 Добавляем обработчики команд (исправленный порядок)
-
+    application.add_handler(CommandHandler("start", start))
     # 🔥 Логирование всех сообщений (группа -1, не блокирует цепочку)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message, block=False), group=-1)
 
-    application.add_handler(CommandHandler("start", start))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message, block=False), group=1)  # ✅ Сохраняем переводы
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_button_click, block=False), group=1)  # ✅ Обрабатываем кнопки 
     application.add_handler(CallbackQueryHandler(handle_explain_request, pattern=r"^explain:"))
@@ -2553,7 +2799,8 @@ def main():
         "cron",
         hour=4,
         minute=1,
-        day_of_week = "mon,tue,thu,fri,sat"
+        #day_of_week = "mon,tue,thu,fri,sat"
+        day_of_week = "mon,thu,fri"
     )
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=5, minute=7)
@@ -2562,12 +2809,13 @@ def main():
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)
     
-    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=20, minute=15)
+    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=19, minute=52)
     scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=20, minute=20)
 
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=8, minute=5)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
@@ -2580,4 +2828,3 @@ def main():
 
 if __name__ == "__main__":
     main()
-
