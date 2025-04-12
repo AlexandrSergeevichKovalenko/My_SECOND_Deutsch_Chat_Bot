@@ -1051,6 +1051,43 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
         return ["Запасное предложение 1", "Запасное предложение 2"]
 
 
+async def recheck_score_only(client, original_text, user_translation):
+    prompt = f"""
+You previously evaluated a student's translation and gave it a score of 0 out of 100.
+
+Please reassess the score **again** based on the information below.
+
+Original sentence (Russian): "{original_text}"  
+User's translation (German): "{user_translation}"  
+
+Return your reassessed score in the following format only:  
+Score: X/100
+""" 
+    for i in range(3):
+        try:
+            responce = await client.chat.completions.create(
+                model="gpt-4-turbo",
+                messages=[{"role": "user", "content": prompt}]
+            )
+            text = responce.choices[0].message.content.strip()
+            print(f"🔁 Ответ на перепроверку оценки:\n{text}")
+            if "score" in text.lower():
+                reassessed_score = text.lower().split("score:")[-1].split("/")[0].strip()
+                try:
+                    if int(reassessed_score) == 0:
+                        continue
+                    return reassessed_score
+                except ValueError:
+                    print(f"⚠️ Не удалось привести reassessed_score к числу: {reassessed_score}")
+                    continue
+
+        except Exception as e:
+            print(f"❌ Ошибка при перепроверке score: {e}")
+            continue
+        
+    return "0" # fallback, если GPT не ответил
+
+
 async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
     client = openai.AsyncOpenAI(api_key=openai.api_key, timeout=60)
     
@@ -1187,6 +1224,15 @@ async def check_translation(original_text, user_translation, update: Update, con
                 print(f"⚠️ Подкатегории отсутствуют в ответе GPT")
 
             if score_str and correct_translation:
+                score_int = int(score_str)
+
+                if score_int == 0:
+                    print(f"⚠️ GPT поставил 0. Запрашиваем повторную оценку...")
+                    reassessed_score = await recheck_score_only(client, original_text, user_translation)
+                    print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
+                    score = reassessed_score
+                    break
+
                 score = score_str
                 print(f"✅ Успешно получены все обязательные данные на попытке {attempt + 1}")
                 break
