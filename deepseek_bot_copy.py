@@ -24,7 +24,7 @@ import anthropic
 from anthropic import AsyncAnthropic
 from telegram.error import TimedOut, BadRequest
 import tempfile
-
+import sys
 
 from google.cloud import texttospeech
 import os
@@ -32,15 +32,27 @@ from pathlib import Path
 from dotenv import load_dotenv
 from pydub import AudioSegment
 import io
-load_dotenv() # Загружаем переменные из .env
+
+
+# === Логирование ===
+# Настраиваем логгер глобально
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+    handlers=[
+        logging.StreamHandler(sys.stdout)  # вывод в stdout
+    ]
+)
+
+load_dotenv(dotenv_path=Path(__file__).parent/".env") # Загружаем переменные из .env
 # Ты кладёшь GOOGLE_APPLICATION_CREDENTIALS=/path/... в .env.
 # load_dotenv() загружает .env и делает вид, что это переменные окружения.
 # os.getenv(...) читает эти значения.
 # Ты вручную регистрируешь это в переменных окружения процесса
 # os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
+success=load_dotenv(dotenv_path=Path(__file__).parent/".env")
 
 application = None
-
 
 
 # Buttons in Telegramm
@@ -491,9 +503,6 @@ async def start(update: Update, context: CallbackContext):
 
 #         await asyncio.sleep(5)  # ✅ Повторяем цикл каждые 5 секунд
 
-
-# === Логирование ===
-logging.basicConfig(format="%(asctime)s - %(name)s - %(levelname)s - %(message)s", level=logging.INFO)
 
 async def log_message(update: Update, context: CallbackContext):
     """логируются (сохраняются) все сообщения пользователей в базе данных"""
@@ -2569,16 +2578,21 @@ GOOGLE_CREDS_FILE_PATH = None
 
 # ✅ # ✅ Загружаем переменные окружения из .env-файла (только при локальной разработке)
 # Это загрузит все переменные из file with name .env which was created by me в os.environ
-from dotenv import load_dotenv
-load_dotenv()
 
 def prepare_google_creds_file():
     global GOOGLE_CREDS_FILE_PATH
+    global success
+    print("✅ .env loaded?", success)
+    print("🧪 Функция prepare_google_creds_file вызвана")
 
     # ✅ 1. Попробовать использовать путь к локальному .json-файлу
     direct_path = os.getenv("GOOGLE_APPLICATION_CREDENTIALS")
-    if direct_path and Path(direct_path).exists():
-        print(f"📂 Используем локальный ключ: {direct_path}")
+    print(f"📢 direct_path (print): {direct_path}")
+    logging.info(f"direct_path: {direct_path}")
+
+    if direct_path:
+        print("🌐 Переменная найдена:", direct_path)
+        print("🧱 Существует ли файл?", Path(direct_path).exists())
         GOOGLE_CREDS_FILE_PATH = direct_path
         return GOOGLE_CREDS_FILE_PATH
     
@@ -2738,15 +2752,15 @@ async def get_yesterdays_mistakes_for_audio_message(context: CallbackContext):
                     await asyncio.sleep(5)
 
 
-import atexit
+# import atexit
 
-def cleanup_creds_file():
-    global GOOGLE_CREDS_FILE_PATH
-    if GOOGLE_CREDS_FILE_PATH and os.path.exists(GOOGLE_CREDS_FILE_PATH):
-        os.remove(GOOGLE_CREDS_FILE_PATH)
-        print(f"🧹 Удалён временный ключ: {GOOGLE_CREDS_FILE_PATH}")
+# def cleanup_creds_file():
+#     global GOOGLE_CREDS_FILE_PATH
+#     if GOOGLE_CREDS_FILE_PATH and os.path.exists(GOOGLE_CREDS_FILE_PATH):
+#         os.remove(GOOGLE_CREDS_FILE_PATH)
+#         print(f"🧹 Удалён временный ключ: {GOOGLE_CREDS_FILE_PATH}")
 
-atexit.register(cleanup_creds_file)
+# atexit.register(cleanup_creds_file)
 
 
 
@@ -2809,13 +2823,13 @@ def main():
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)
     
-    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=19, minute=52)
-    scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=20, minute=20)
+    scheduler.add_job(lambda: run_async_job(send_daily_summary), "cron", hour=20, minute=52)
+    scheduler.add_job(lambda: run_async_job(send_weekly_summary), "cron", day_of_week="sun", hour=20, minute=55)
 
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
-    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=8, minute=5)
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=5, minute=35)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
