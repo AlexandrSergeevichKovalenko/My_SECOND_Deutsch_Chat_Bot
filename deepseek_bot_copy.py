@@ -1224,7 +1224,15 @@ async def check_translation(original_text, user_translation, update: Update, con
                 print(f"⚠️ Подкатегории отсутствуют в ответе GPT")
 
             if score_str and correct_translation:
-                score_int = int(score_str)
+                try:
+                    score_int = int(score_str)
+                except ValueError:
+                    print(f"⚠️ Не удалось привести score_str к числу: {score_str}")
+                    print(f"⚠️ GPT вернул некорректный формат оценки. Запрашиваем повторную оценку...")
+                    reassessed_score = await recheck_score_only(client, original_text, user_translation)
+                    print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
+                    score = reassessed_score
+                    break  # завершаем цикл успешно
 
                 if score_int == 0:
                     print(f"⚠️ GPT поставил 0. Запрашиваем повторную оценку...")
