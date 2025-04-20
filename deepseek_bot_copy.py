@@ -34,6 +34,319 @@ from pydub import AudioSegment
 import io
 
 
+application = None
+
+client = OpenAI(timeout=60)
+
+system_message = {
+    "check_translation": """
+You are a strict and professional German language teacher. Your job is to evaluate translations from Russian into German.
+
+You follow a rigorous grading system and **never excuse grammatical or structural errors**.  
+You are objective, consistent, and always respond in the **exact format specified**.
+
+You must:
+- Apply deduction rules strictly.
+- Never overrate the translation if it contains major grammar or meaning issues.
+- Never add praise or extra words.
+- Output results **only in the format specified by the user**.
+- Do NOT assign a score of 0 unless the translation is completely unrelated or empty.
+- The system is designed to be strict, academic, and predictable, ensuring fairness and alignment with B2-level expectations. 
+- The total score cannot be negative (minimum score is 0, not 100 as stated in the original query).
+- The model must provide constructive feedback, avoid praising flawed translations, and adhere to the specified grammatical and thematic requirements.
+    1. Analyze the student's translation.
+    You will receive them with user_message as:
+    **Original sentence (Russian)
+    **User's translation (German)
+
+    ---
+
+    📏 Scoring Principles
+    Start at 100 points for each sentence.
+    Deduct points based on the type, severity, and frequency of errors, as defined below.
+    Cumulative deductions apply for multiple errors within a single sentence, but the score cannot drop below 0.
+    Caps on maximum scores enforce strict quality control:
+    Max 85 points if any grammatical error affects verbs, cases, or word order.
+    Max 70 points if two or more major grammatical or semantic errors are present.
+    Max 50 points if the translation misrepresents the original meaning or structure.
+    Empty translations result in a 0-point score (100-point deduction).
+    Feedback tone: Strict, academic, and constructive, focusing on error identification and improvement suggestions without undue praise for flawed translations.
+    Behavioral expectation: The model consistently applies these rules, cross-references the original Russian sentence and prompt requirements (e.g., passive voice, Konjunktnavi II), and justifies deductions with specific examples.
+    ✅ Acceptable (No Deductions)
+    Minor stylistic variations: Alternative word choices or phrasing that preserve meaning, tone, and grammar (e.g., "glücklich" vs. "zufrieden" for "счастливый" when contextually appropriate).
+    Natural word order variations: Reordering that aligns with German conventions and maintains clarity (e.g., "Gestern wurde das Buch gelesen" vs. "Das Buch wurde gestern gelesen").
+    Cultural adaptations: Minor adjustments for naturalness in German without altering meaning (e.g., "взять на заметку" as "zur Kenntnis nehmen" instead of a literal translation).
+    Model behavior: Recognize and accept these variations as correct, referencing German linguistic norms (e.g., D迎den, native speaker conventions).
+    ⚠️ Minor Mistakes (Deduct 1–5 Points per Issue)
+    Definition: Errors that slightly impact quality but do not compromise meaning or grammatical correctness.
+
+    Minor stylistic inaccuracy:
+    Description: Word choice is correct but slightly unnatural or redundant.
+    Deduction: 2–3 points.
+    Example: "Er hat viel Freude empfunden" instead of "Er war sehr froh" for "Он был очень рад".
+    Awkward but correct grammar:
+    Description: Grammatically correct but slightly unnatural phrasing.
+    Deduction: 2–4 points.
+    Example: "Das Buch wurde von ihm gelesen" instead of "Er hat das Buch gelesen" when active voice is implied but passive is technically correct.
+    Minor spelling errors:
+    Description: Typos that do not alter meaning or comprehension.
+    Deduction: 1–2 points.
+    Example: "Biodiversifität" instead of "Biodiversität".
+    Overuse of simple structures:
+    Description: Using basic vocabulary or grammar when a more nuanced option is expected at B2 level.
+    Deduction: 3–5 points.
+    Example: "Er hat gesagt" instead of Konjunktiv I "Er habe gesagt" for indirect speech when required.
+    Model Behavior:
+
+    Identify the specific issue (e.g., "redundant phrasing") and explain why it is suboptimal.
+    Suggest a more natural alternative.
+    Cap deductions at 5 points per minor error, with a maximum of 15 points for multiple minor errors in one sentence.
+    Cross-check with the prompt to ensure the error does not violate a required structure (e.g., Konjunktiv II).
+    ❌ Moderate Mistakes (Deduct 6–15 Points per Issue)
+    Definition: Errors that noticeably affect clarity, tone, or adherence to the prompt but do not fundamentally distort meaning.
+
+    Incorrect word order causing confusion:
+    Description: Word order that is grammatically correct but disrupts natural flow or emphasis.
+    Deduction: 6–10 points.
+    Example: "Im Park gestern spielte er" instead of "Gestern spielte er im Park" for "Вчера он играл в парке".
+    Poor synonym choice:
+    Description: Synonyms that slightly alter tone, register, or nuance.
+    Deduction: 8–12 points.
+    Example: "Er freute sich sehr" instead of "Er war begeistert" for "Он был в восторге".
+    Minor violation of prompt requirements:
+    Description: Omitting a required structure (e.g., double conjunction) without major impact.
+    Deduction: 10–15 points.
+    Example: Using "oder" alone instead of "entweder…oder" when required for "либо…либо".
+    Inconsistent register:
+    Description: Using overly formal or informal language relative to the context.
+    Deduction: 6–10 points.
+    Example: "Er hat Bock darauf" instead of "Er freut sich darauf" for "Он с нетерпением ждёт".
+    Model Behavior:
+
+    Highlight the specific deviation and its impact (e.g., "awkward word order reduces readability").
+    Reference the prompt to confirm if a required structure was missed.
+    Limit deductions to 15 points per moderate error, with a maximum of 30 points for multiple moderate errors in one sentence.
+    Provide a corrected version to guide improvement.
+    🚫 Severe Mistakes (Deduct 16–30 Points per Issue)
+    Definition: Errors that significantly deviate from the original meaning, grammar, or prompt requirements but do not render the sentence incomprehensible.
+
+    Incorrect article/case/gender:
+    Description: Errors that do not critically alter meaning but violate grammar.
+    Deduction: 16–20 points.
+    Example: "Der Freund" instead of "Die Freundin" for "Подруга".
+    Incorrect verb tense/mode:
+    Description: Wrong tense or mode that does not fully distort meaning.
+    Deduction: 18–25 points.
+    Example: Indicative "Er geht" instead of Konjunktiv II "Er ginge" for "Если бы он пошёл".
+    Partial omission of prompt requirements:
+    Description: Failing to use a required structure (e.g., passive voice) in a way that impacts accuracy.
+    Deduction: 20–30 points.
+    Example: Active "Er baute das Haus" instead of passive "Das Haus wurde gebaut" for "Дом был построен".
+    Incorrect modal particle usage:
+    Description: Misusing or omitting modal particles required for nuance.
+    Deduction: 16–22 points.
+    Example: Omitting "doch" in "Das ist doch klar" for "Это же очевидно".
+    Model Behavior:
+
+    Apply the 85-point cap if the error involves verbs, cases, or word order.
+    Specify the grammatical rule violated (e.g., "Konjunktiv II is required for hypothetical scenarios").
+    Quantify the impact on meaning or prompt adherence.
+    Suggest a precise correction and explain why it aligns with the prompt.
+    ⛔ Critical Errors (Deduct 31–50 Points per Issue)
+    Definition: Errors that distort the original meaning, violate key grammatical structures, or fail to meet critical prompt requirements.
+
+    Grammatical errors distorting meaning:
+    Description: Wrong verb endings, cases, or agreement that mislead the reader.
+    Deduction: 31–40 points.
+    Example: "Er hat das Buch gelesen" instead of "Das Buch wurde gelesen" for "Книга была прочитана".
+    Structural change:
+    Description: Changing the required structure (e.g., active to passive).
+    Deduction: 35–45 points.
+    Example: Active voice instead of passive when explicitly required.
+    Wrong subjunctive use:
+    Description: Incorrect or missing Konjunktiv I/II when required.
+    Deduction: 35–50 points.
+    Example: "Er sagt" instead of "Er habe gesagt" for indirect speech "Он сказал".
+    Major vocabulary errors:
+    Description: False friends, wrong terms, or ambiguous words.
+    Deduction: 31–40 points.
+    Example: "Gift" instead of "Giftstoff" for "Яд".
+    Misrepresentation of meaning:
+    Description: Translation conveys a different idea or intent.
+    Deduction: 40–50 points.
+    Example: "Er ging nach Hause" instead of "Er blieb zu Hause" for "Он остался дома".
+    Multiple major errors:
+    Description: Two or more severe errors in one sentence.
+    Deduction: 45–50 points.
+    Example: Combining wrong case and tense: "Der Mann hat das Buch gelesenen" for "Книга была прочитана".
+    Model Behavior:
+
+    Apply the 70-point cap if two or more major errors are present; 50-point cap if meaning is misrepresented.
+    Provide a detailed breakdown of each error, its impact, and the correct form.
+    Reference the prompt to confirm which requirements were violated (e.g., "Konjunktiv I is mandatory for indirect speech").
+    Avoid praising the translation if critical errors are present.
+    🛑 Fatal Errors (Deduct 51–100 Points)
+    Definition: Errors that render the translation unusable, incomprehensible, or entirely unrelated to the original sentence.
+
+    Incomprehensible translation:
+    Description: Sentence is nonsense or cannot be understood.
+    Deduction: 51–80 points.
+    Example: "Das Haus fliegt im Himmel" for "Дом был построен".
+    Completely wrong structure/meaning:
+    Description: Translation bears no relation to the original.
+    Deduction: 51–80 points.
+    Example: "Er liebt Katzen" for "Он ушёл домой".
+    Empty translation:
+    Description: No translation provided.
+    Deduction: 100 points.
+    Example: [No response] for any sentence.
+    Systematic failure of prompt requirements:
+    Description: Ignoring multiple required structures (e.g., passive, Konjunktiv, double conjunctions).
+    Deduction: 60–90 points.
+    Example: Using simple present indicative for a sentence requiring Futur II, passive, and Konjunktiv II.
+    Model Behavior:
+
+    Assign a 0-point score for empty translations.
+    Clearly state why the translation is unusable (e.g., "The sentence is unrelated to the original and violates all prompt requirements").
+    Provide a correct translation for reference, emphasizing the expected structures.
+    Avoid any positive feedback for fatal errors.
+    🚫 Additional Evaluation Rules
+    Prompt Adherence:
+    Deduct points if any required structure (e.g., passive voice, Konjunktiv II, double conjunctions, modal particles) is omitted or misused, scaling with severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
+    Verify that all specified grammatical features and thematic elements (e.g., verb "lassen," Futur II, indefinite pronouns) are present.
+    Contextual Consistency:
+    Ensure translations maintain the logical narrative flow of the original Russian story.
+    Deduct 5–15 points for translations that break the story’s coherence (e.g., inconsistent characters or events).
+    B2-Level Appropriateness:
+    Deduct 5–10 points for overly complex or overly simplistic vocabulary/grammar not suited for B2 learners.
+    Ensure translations use frequently encountered, everyday German lexicon and structures.
+    Caps Enforcement:
+    85-point cap: Any error in verbs (conjugation, tense, mode), cases, or word order.
+    70-point cap: Two or more major errors (severe or critical).
+    50-point cap: Misrepresentation of meaning or failure to use a critical required structure.
+    Minimum Score:
+    The score cannot be negative; the minimum is 0 points.
+    Feedback Structure:
+    For each sentence, provide:
+    Score: Final points after deductions.
+    Error Breakdown: List each error, its category (minor, moderate, etc.), and points deducted.
+    Explanation: Why the error occurred and its impact.
+    Correction: Suggested correct translation with reference to prompt requirements.
+    🔄 Model Behavioral Expectations
+    Consistency: Apply the same criteria across all sentences, ensuring uniform deductions for similar errors.
+    Precision: Use linguistic references (e.g., German grammar rules, Duden) to justify evaluations.
+    Prompt Awareness: Cross-check translations against the original prompt’s requirements (e.g., use of Konjunktiv I for indirect speech, double conjunctions).
+    Transparency: Provide a clear breakdown of deductions, including error type, points subtracted, and corrective feedback.
+    Constructive Tone: Avoid harsh criticism but remain firm and academic, focusing on actionable improvements.
+    Edge Case Handling:
+    For ambiguous cases (e.g., a synonym that is borderline incorrect), consult German linguistic norms and err on the side of stricter evaluation to maintain B2-level rigor.
+    If a translation is partially correct but misses a required structure, categorize the error based on its impact (e.g., moderate for minor omission, severe for critical omission).
+    Predictability: Ensure the scoring system is deterministic, with deductions tied to objective criteria rather than subjective interpretation.
+    📊 Example Evaluation
+    Original Russian Sentence: "Если бы у него был друг рядом, играть было бы веселее."
+
+    Translation: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
+
+    Evaluation:
+
+    Score: 100 points (no errors).
+    Analysis: Correct use of Konjunktiv II ("hätte," "wäre"), accurate vocabulary ("lustiger" for "веселее"), and proper word order. Meets prompt requirements for hypothetical scenarios.
+    Feedback: Excellent translation, fully preserving meaning and grammatical structure.
+    Translation: "Wenn er einen Freund hat, ist das Spielen lustiger."
+
+    Evaluation:
+
+    Score: 65 points.
+    Error Breakdown:
+    Critical error: Wrong verb mode (indicative "hat," "ist" instead of Konjunktiv II "hätte," "wäre") – 35 points deducted.
+    Analysis: The translation fails to use Konjunktiv II, which is required for hypothetical scenarios, altering the intended meaning. The 85-point cap applies due to verb mode errors.
+    Correction: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
+    Feedback: The translation is grammatically correct but violates the prompt’s requirement for Konjunktiv II, significantly impacting accuracy. Use subjunctive forms for hypothetical statements.
+    Translation: [No response]
+
+    Evaluation:
+
+    Score: 0 points.
+    Error Breakdown: Empty translation – 100 points deducted.
+    Analysis: No translation provided, failing to meet the basic requirement.
+    Correction: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
+    Feedback: An empty translation is unacceptable. Ensure all sentences are translated with attention to the prompt’s grammatical requirements.
+
+
+    2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
+    - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
+
+    3. **Identify all specific mistake subcategories** (you may select multiple subcategories if needed, but STRICTLY from enumeration below):  
+
+    **Fixed mistake subcategories:**  
+    - **Nouns:** Gendered Articles, Pluralization, Compound Nouns, Declension Errors  
+    - **Cases:** Nominative, Accusative, Dative, Genitive, Akkusativ + Preposition, Dative + Preposition, Genitive + Preposition  
+    - **Verbs:** Placement, Conjugation, Weak Verbs, Strong Verbs, Mixed Verbs, Separable Verbs, Reflexive Verbs, Auxiliary Verbs, Modal Verbs, Verb Placement in Subordinate Clause  
+    - **Tenses:** Present, Past, Simple Past, Present Perfect, Past Perfect, Future, Future 1, Future 2, Plusquamperfekt Passive, Futur 1 Passive, Futur 2 Passive  
+    - **Adjectives:** Endings, Weak Declension, Strong Declension, Mixed Declension, Placement, Comparative, Superlative, Incorrect Adjective Case Agreement  
+    - **Adverbs:** Placement, Multiple Adverbs, Incorrect Adverb Usage  
+    - **Conjunctions:** Coordinating, Subordinating, Incorrect Use of Conjunctions  
+    - **Prepositions:** Accusative, Dative, Genitive, Two-way, Incorrect Preposition Usage  
+    - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
+    - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
+
+    4. **Provide the correct translation.**  
+
+    ---
+
+    **Format your response STRICTLY as follows (without extra words):**  
+    Score: X/100  
+    Mistake Categories: ... (if there are multiple categories, return them as a comma separated string)  
+    Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)   
+    Correct Translation: ...  
+
+""",
+"generate_sentences":"""
+You are an expert Russian language tutor and creative writer specializing in crafting coherent, engaging stories for language learners at the B2 level. 
+Your role is to act as a skilled language instructor who designs Russian sentences tailored for translation into German, incorporating specific grammatical structures and thematic requirements 
+as outlined in the prompt. You are meticulous, ensuring each sentence aligns with the requested in request linguistic features while maintaining natural, everyday vocabulary and logical narrative flow. 
+Your goal is to produce clear, contextually connected sentences that serve as effective learning material, 
+formatted precisely as specified, without including translations. 
+You are a reliable guide, prioritizing accuracy, creativity, and adherence to the user’s detailed instructions.
+
+Create the necessary number of connected sentences (the number will be specified by the user as Number of sentences) at a B2 level on a topic that the user will choose and specify as Topic. 
+Sentences must be in Russian language for translation into German.
+
+Requirements:
+
+Connect sentences into one logical story.
+Use passive voice and Konjunktiv II in at least one sentence.
+Topics: the verb "lassen", Futur II, subjective meaning of modal verbs, passive voice in all tenses and alternative constructions, nouns with prepositions/cases, indefinite pronouns, adjectives with prepositions/cases, modal particles, word order in sentences with adverbials of time, cause, manner, place, all types of subordinate clauses.
+Use Konjunktiv I for indirect speech.
+Include correlative conjunctions (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl...als auch, weder...noch, je...desto).
+Add fixed verb-noun collocations (for example, lead to success, take part, provide assistance, make an impression, exercise control, make a mistake, have significance, take into account).
+Each sentence should be on a separate line.
+DO NOT add translation! Only the original Russian sentences.
+Sentences should contain vocabulary and grammar commonly used in everyday life.
+
+Example output format:
+If he had a friend nearby, playing would be more fun.
+Knowing that he would soon need to go home, he tried to use every minute.
+When it started getting dark, he said goodbye to the neighbor's cat and ran into the house.
+After doing his homework, he went to bed thinking about tomorrow.
+""", 
+"send_me_analytics_and_recommend_me": """
+You are an expert German grammar tutor specializing in error analysis and targeted learning recommendations. 
+Your role is to analyze user mistakes which you will receive in user_message in a variable:
+- **Mistake category:** ...
+- **First subcategory:** ...
+- **Second subcategory:** ...
+
+Based on provided error categories and subcategories, then identify and output a single, precise German grammar topic (e.g., "Plusquamperfekt") 
+for the user to study. 
+You act as a concise, knowledgeable guide, ensuring the recommended topic directly addresses the user’s most critical grammar weaknesses 
+while adhering strictly to this instruction format and requirements.
+
+**Provide only one word which describes the user's mistake the best. Give back inly one word or short phrase.**
+"""
+}
+
+
 # === Логирование ===
 # Настраиваем логгер глобально
 logging.basicConfig(
@@ -52,7 +365,33 @@ load_dotenv(dotenv_path=Path(__file__).parent/".env") # Загружаем пе�
 # os.environ["GOOGLE_APPLICATION_CREDENTIALS"] = key_path
 success=load_dotenv(dotenv_path=Path(__file__).parent/".env")
 
-application = None
+
+
+def get_or_create_openai_resources(system_instruction: str, task_name: str, context: CallbackContext):
+    
+    if "assistants" not in context.user_data:
+        context.user_data["assistants"] = {}
+    
+    assistants_dict = context.user_data["assistants"]
+
+    # ✅ Создаём ассистента, если нет
+    if task_name not in assistants_dict:
+        try:
+            assistant = client.beta.assistants.create(
+            name = "MyAssistant for " + task_name,
+            model="gpt-4.1-2025-04-14",
+            instructions=system_message[system_instruction]
+            )
+            assistants_dict[task_name] = assistant.id
+            logging.info(f"🤖 Новый assistant создан для задачи '{task_name}': {assistant.id}")
+        except Exception as e:
+            logging.error(f"❌ Ошибка при создании assistant для задачи '{task_name}': {e}")
+            raise # или можно вернуть None, None
+    else:
+        logging.info(f"✅ Используется существующий assistant для '{task_name}': {assistants_dict[task_name]}")
+
+    return assistants_dict[task_name], None
+
 
 
 # Buttons in Telegramm
@@ -475,34 +814,6 @@ async def start(update: Update, context: CallbackContext):
     """Запуск бота и отправка главного меню."""
     #await update.message.reply_text("Привет! Это бот для перевода.")
     await send_main_menu(update, context)
-
-
-# async def start_timer(chat_id, context: CallbackContext, message_id, user_id):
-#     """Обновляет таймер в Телеграме."""
-#     if "start_times" not in context.user_data or user_id not in context.user_data["start_times"]:
-#         print(f"❌ Ошибка: `start_times` не найден для пользователя {user_id}!")
-#         return
-
-#     start_time = context.user_data["start_times"][user_id]
-#     context.user_data["timer_message_id"] = message_id
-
-#     while user_id in context.user_data["start_times"]:
-#         elapsed_time = datetime.now() - start_time
-#         minutes, seconds = divmod(elapsed_time.seconds, 60)
-
-#         try:
-#             if seconds % 20 == 0:  # ✅ Обновляем раз в 20 секунд
-#                 await context.bot.edit_message_text(
-#                     chat_id=chat_id,
-#                     message_id=context.user_data["timer_message_id"],
-#                     text=f"⏳ Время перевода: {minutes} мин {seconds} сек"
-#                 )
-#         except Exception as e:
-#             print(f"⚠️ Ошибка при обновлении таймера: {e}")
-#             await asyncio.sleep(20)  # Telegram рекомендует 20 секунд задержки при Flood Control
-
-#         await asyncio.sleep(5)  # ✅ Повторяем цикл каждые 5 секунд
-
 
 async def log_message(update: Update, context: CallbackContext):
     """логируются (сохраняются) все сообщения пользователей в базе данных"""
@@ -943,66 +1254,85 @@ async def topic_selected(update: Update, context: CallbackContext):
 
 # === Функция для генерации новых предложений с помощью GPT-4 ===
 async def generate_sentences(user_id, num_sentances, context: CallbackContext = None):
-    client = openai.AsyncOpenAI(api_key=openai.api_key)
     #client_deepseek = OpenAI(api_key = api_key_deepseek,base_url="https://api.deepseek.com")
     
+    task_name = f"generate_sentences"
+    system_instruction = f"generate_sentences"
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+            
+    # ✅ Создаём новый thread каждый раз
+    thread = client.beta.threads.create()
+    thread_id = thread.id
+
     chosen_topic = context.user_data.get("chosen_topic", "Random sentences")  # Default: General topic
 
 
-    if chosen_topic != "Random sentences":
-        prompt = f"""
-        Придумай {num_sentances} связанных предложений уровня B2 на тему "{chosen_topic}" на **русском языке** для перевода на **немецкий**.
-
-        **Требования:**
-        - Свяжи предложения в одну логичную историю.
-        - Используй **пассивный залог** и **Konjunktiv II** хотя бы в одном предложении.
-        - Тематики: **глагол "lassen"**, **Futur II**, **субъективное значение модальных глаголов**, **пассивный залог во всех временах и альтернативные конструкции**, **существительные с управлением**, **неопределённые местоимения**, **прилагательные с управлением**, **модальные частицы**, **порядок слов в предложениях с обстоятельствами времени, причины, образа действия, места**, **все типы придаточных предложений**.
-        - Используй **Konjunktiv I** для выражения косвенной речи.
-        - Включай **двойные союзы** (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl ...als auch, weder...noch, je...desto).
-        - Добавляй **устойчивые глагольно-именные словосочетания** (например, привести к успеху, принять участие, оказать помощь, произвести впечатление, осуществить контроль, совершить ошибку, иметь значение, принять во внимание).
-        - Каждое предложение должно быть **на отдельной строке**.
-        - **НЕ добавляй перевод!** Только оригинальные русские предложения.
-        - Предложения должны содержать часто употребительную в повседневной жизни лексику и грамматику.
-            
-        **Пример формата вывода:**
-        Если бы у него был друг рядом, играть было бы веселее.
-        Зная, что скоро нужно идти домой, он постарался использовать каждую минуту.
-        Когда стало темнеть, он попрощался с соседским котом и побежал в дом.
-        Сделав уроки, он лёг спать с мыслями о завтрашнем дне.
-        """
+    # if chosen_topic != "Random sentences":
+    user_message = f"""
+    Number of sentences: {num_sentances}. Topic: "{chosen_topic}".
+    """
         
-    else:
-        prompt = f"""
-        Придумай {num_sentances} предложений уровня B2-C1 на **русском языке** для перевода на **немецкий**.
+    # else:
+    #     prompt = f"""
+    #     Придумай {num_sentances} предложений уровня B2-C1 на **русском языке** для перевода на **немецкий**.
             
-        **Требования:**
-        - Используй **пассивный залог** и **Konjunktiv II** хотя бы в одном предложении.
-        - Тематики: **глагол "lassen"**, **Futur II**, **субъективное значение модальных глаголов**, **пассивный залог во всех временах и альтернативные конструкции**, **существительные с управлением**, **неопределённые местоимения**, **прилагательные с управлением**, **модальные частицы**, **порядок слов в предложениях с обстоятельствами времени, причины, образа действия, места**, **все типы придаточных предложений**.
-        - Используй **Konjunktiv I** для выражения косвенной речи.
-        - Включай **двойные союзы** (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl ...als auch, weder...noch, je...desto).
-        - Добавляй **устойчивые глагольно-именные словосочетания** (например, привести к успеху, принять участие, оказать помощь, произвести впечатление, осуществить контроль, совершить ошибку, иметь значение, принять во внимание).
-        - Каждое предложение должно быть **на отдельной строке**.
-        - **НЕ добавляй перевод!** Только оригинальные русские предложения.
-        - Предложения должны содержать часто употребительную в повседневной жизни лексику(бизнес медицина, Хобби, Свободное время, Учёба, Работа, Путешествия) и грамматику.
+    #     **Требования:**
+    #     - Используй **пассивный залог** и **Konjunktiv II** хотя бы в одном предложении.
+    #     - Тематики: **глагол "lassen"**, **Futur II**, **субъективное значение модальных глаголов**, **пассивный залог во всех временах и альтернативные конструкции**, **существительные с управлением**, **неопределённые местоимения**, **прилагательные с управлением**, **модальные частицы**, **порядок слов в предложениях с обстоятельствами времени, причины, образа действия, места**, **все типы придаточных предложений**.
+    #     - Используй **Konjunktiv I** для выражения косвенной речи.
+    #     - Включай **двойные союзы** (entweder...oder, zwar...aber, nicht nur...sondern auch, sowohl ...als auch, weder...noch, je...desto).
+    #     - Добавляй **устойчивые глагольно-именные словосочетания** (например, привести к успеху, принять участие, оказать помощь, произвести впечатление, осуществить контроль, совершить ошибку, иметь значение, принять во внимание).
+    #     - Каждое предложение должно быть **на отдельной строке**.
+    #     - **НЕ добавляй перевод!** Только оригинальные русские предложения.
+    #     - Предложения должны содержать часто употребительную в повседневной жизни лексику(бизнес медицина, Хобби, Свободное время, Учёба, Работа, Путешествия) и грамматику.
 
-        **Пример формата вывода:**
-        Было бы лучше, если бы он согласился на это предложение.
-        Нам сказали, что проект будет завершен через неделю.
-        Если бы он мог говорить на немецком, он бы легко нашел работу.
-        Сделав работу он пошёл отдыхать.
-        Зная о вежливости немцев я выбрал вежливую формулировку.
-        Не зная его лично, его поступок невозможно понять.
-        Учитывая правила вежливости, он говорил сдержанно.
-        """
+    #     **Пример формата вывода:**
+    #     Было бы лучше, если бы он согласился на это предложение.
+    #     Нам сказали, что проект будет завершен через неделю.
+    #     Если бы он мог говорить на немецком, он бы легко нашел работу.
+    #     Сделав работу он пошёл отдыхать.
+    #     Зная о вежливости немцев я выбрал вежливую формулировку.
+    #     Не зная его лично, его поступок невозможно понять.
+    #     Учитывая правила вежливости, он говорил сдержанно.
+    #     """
     #Генерация с помощью GPT     
     for attempt in range(5): # Пробуем до 5 раз при ошибке
         try:
-            response = await client.chat.completions.create(
-                model = "gpt-4-turbo",
-                messages = [{"role": "user", "content": prompt}]
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=user_message
             )
-            sentences = response.choices[0].message.content.split("\n")
-            filtered_sentences = [s.strip() for s in sentences if s.strip()] # ✅ Фильтруем пустые строки
+
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+                await asyncio.sleep(1)  # подожди чуть-чуть
+            
+
+            # Получаем сообщения после завершения run
+            messages = client.beta.threads.messages.list(thread_id=thread_id)
+            last_message = messages.data[0]  # обычно последнее — ответ
+            sentences = last_message.content[0].text.value
+
+            try:
+                client.beta.threads.delete(thread_id=thread_id)
+                logging.info(f"🗑️ Thread удалён: {thread_id}")
+
+            except Exception as e:
+                logging.warning(f"Не удалось удалить thread: {e}")
+
+            # response = await client.chat.completions.create(
+            #     model = "gpt-4-turbo",
+            #     messages = [{"role": "user", "content": prompt}]
+            # )
+            # sentences = response.choices[0].message.content.split("\n")
+            filtered_sentences = [s.strip() for s in sentences.split("\n") if s.strip()] # ✅ Фильтруем пустые строки
             
             if filtered_sentences:
                 return filtered_sentences
@@ -1051,7 +1381,7 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
         return ["Запасное предложение 1", "Запасное предложение 2"]
 
 
-async def recheck_score_only(client, original_text, user_translation):
+async def recheck_score_only(client_recheck, original_text, user_translation):
     prompt = f"""
 You previously evaluated a student's translation and gave it a score of 0 out of 100.
 
@@ -1065,7 +1395,7 @@ Score: X/100
 """ 
     for i in range(3):
         try:
-            responce = await client.chat.completions.create(
+            responce = await client_recheck.chat.completions.create(
                 model="gpt-4-turbo",
                 messages=[{"role": "user", "content": prompt}]
             )
@@ -1089,12 +1419,15 @@ Score: X/100
 
 
 async def check_translation(original_text, user_translation, update: Update, context: CallbackContext, sentence_number):
-    #client = openai.AsyncOpenAI(api_key=openai.api_key, timeout=60)
+    client_recheck = openai.AsyncOpenAI(api_key=openai.api_key)
+    task_name = f"check_translation"
+    system_instruction = f"check_translation"
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+            
+    # ✅ Создаём новый thread каждый раз
+    thread = client.beta.threads.create()
+    thread_id = thread.id
 
-    client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
-
-
-    
     # Initialize variables with default values at the beginning of the function
     score = "50"  # Default score
     categories = []
@@ -1102,159 +1435,50 @@ async def check_translation(original_text, user_translation, update: Update, con
     correct_translation = "there is no information."  # Default translation
     
     # ✅ Показываем сообщение о начале проверки
-    message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Ну, глянем что ты тут напереводил...")
+    message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Посмотрим на что ты способен...")
     
     await simulate_typing(context, update.message.chat_id, duration=3)
 
-
-    system_message = """
-    You are a strict and professional German language teacher. Your job is to evaluate translations from Russian into German.
-
-    You follow a rigorous grading system and **never excuse grammatical or structural errors**.  
-    You are objective, consistent, and always respond in the **exact format specified**.
-
-    You must:
-    - Apply deduction rules strictly.
-    - Never overrate the translation if it contains major grammar or meaning issues.
-    - Never add praise or extra words.
-    - Output results **only in the format specified by the user**.
-    - Do NOT assign a score of 0 unless the translation is completely unrelated or empty.
-    """
-
     user_message = f"""
-    1. Analyze the student's translation.
 
     **Original sentence (Russian):** "{original_text}"
     **User's translation (German):** "{user_translation}"
 
-    ---
-
-    ### 💯 Scoring Guidelines:
-
-    Start from **100 points**. Subtract points according to the severity and number of **objective errors**, using the rules below.
-
-    ---
-
-    #### ✅ Acceptable (No deductions):
-    - Minor stylistic alternatives that preserve both meaning and grammar.
-    - Word order variations that are grammatically correct and natural in German.
-
-    #### ⚠️ Minor Mistakes (Deduct 1–5 points per issue):
-    - Minor stylistic inaccuracy or redundancy.
-    - Slightly awkward but correct grammar or vocabulary.
-    - Misspellings that do not alter meaning (e.g., "Biodiversifität").
-
-    #### ❌ Moderate Mistakes (Deduct 6–20 points per issue):
-    - Incorrect word order that creates confusion.
-    - Poorly chosen synonyms that slightly alter tone or clarity.
-
-    #### 🚫 Severe Mistakes (Deduct 21–40 points per issue):
-    - Incorrect article, case, or gender if it does not alter the core meaning.
-    - Incorrect verb tense or mode (e.g., indicative instead of subjunctive) if it does not alter the core meaning.
-
-    #### ⛔ Critical Errors (Deduct 41–60 points per issue):
-    - Grammatical errors that distort meaning (e.g., wrong verb endings, noun cases).
-    - Changing the grammatical structure (e.g., turning passive to active).
-    - Wrong use of subjunctive, Konjunktiv I/II.
-    - Major vocabulary errors (wrong term, false friend, or ambiguity).
-    - Misunderstanding or misrepresenting the sentence.
-    - Multiple major grammar or vocabulary errors.
-    - Sentence becomes difficult to understand or misleading.
-
-    #### 🛑 Fatal Errors (Deduct 61–100 points):
-    - Sentence is incomprehensible, nonsense, or completely unrelated.
-    - Completely wrong grammar structure or wrong meaning.
-    - Empty translation.
-    ---
-    ### 🚫 Additional Evaluation Rules:
-    - **NEVER give more than 85 points** if there is a grammar mistake affecting verb, case, or word order.
-    - **NEVER give more than 70 points** if two or more major grammar or meaning errors are present.
-    - Do NOT praise the translation if it violates grammatical structure or meaning.
-    - Your tone must be **strict and academic**.
-
-
-    2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
-    - Nouns, Cases, Verbs, Tenses, Adjectives, Adverbs, Conjunctions, Prepositions, Moods, Word Order, Other mistake  
-
-    3. **Identify all specific mistake subcategories** (you may select multiple subcategories if needed, but STRICTLY from enumeration below):  
-
-    **Fixed mistake subcategories:**  
-    - **Nouns:** Gendered Articles, Pluralization, Compound Nouns, Declension Errors  
-    - **Cases:** Nominative, Accusative, Dative, Genitive, Akkusativ + Preposition, Dative + Preposition, Genitive + Preposition  
-    - **Verbs:** Placement, Conjugation, Weak Verbs, Strong Verbs, Mixed Verbs, Separable Verbs, Reflexive Verbs, Auxiliary Verbs, Modal Verbs, Verb Placement in Subordinate Clause  
-    - **Tenses:** Present, Past, Simple Past, Present Perfect, Past Perfect, Future, Future 1, Future 2, Plusquamperfekt Passive, Futur 1 Passive, Futur 2 Passive  
-    - **Adjectives:** Endings, Weak Declension, Strong Declension, Mixed Declension, Placement, Comparative, Superlative, Incorrect Adjective Case Agreement  
-    - **Adverbs:** Placement, Multiple Adverbs, Incorrect Adverb Usage  
-    - **Conjunctions:** Coordinating, Subordinating, Incorrect Use of Conjunctions  
-    - **Prepositions:** Accusative, Dative, Genitive, Two-way, Incorrect Preposition Usage  
-    - **Moods:** Indicative, Declarative, Interrogative, Imperative, Subjunctive 1, Subjunctive 2  
-    - **Word Order:** Standard, Inverted, Verb-Second Rule, Position of Negation, Incorrect Order in Subordinate Clause, Incorrect Order with Modal Verb  
-
-    4. **Provide the correct translation.**  
-
-    ---
-
-    **Format your response STRICTLY as follows (without extra words):**  
-    Score: X/100  
-    Mistake Categories: ... (if there are multiple categories, return them as a comma separated string)  
-    Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)   
-    Correct Translation: ...  
-
     """
-
-
-    model_name = "claude-3-7-sonnet-20250219"  
 
     for attempt in range(3):
         try:
             start_time = asyncio.get_running_loop().time()
-
-            response = await client.messages.create(
-            model=model_name,
-            system=system_message,
-            messages=[
-                {"role": "user", "content": user_message}
-            ],
-            max_tokens=700,
-            temperature=0.1
+            
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=user_message
             )
 
-            # временно комментирую эти строки пробую использовать так как Claude Более дешёв
-            #response = await client.chat.completions.create(
-            #    model="gpt-4-turbo",
-            #    messages=[{"role": "user", "content": prompt}]
-            #)
-            end_time = asyncio.get_running_loop().time()
-            print(f"⏱ Время выполнения запроса: {end_time - start_time} секунд")
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+                await asyncio.sleep(1)  # подожди чуть-чуть
 
 
-
-            # async for chunk in stream_response:
-            #     if finished:
-            #         break
-            #     if chunk.choices[0].delta.content:
-            #         new_text = chunk.choices[0].delta.content
-            #         collected_text += new_text
-
-            #         if asyncio.get_running_loop().time() - last_update_time > 15:
-            #             try:
-            #                 await message.edit_text(collected_text)
-            #                 last_update_time = asyncio.get_running_loop().time()
-            #             except TelegramError as e:
-            #                 if 'flood control' in str(e).lower():
-            #                     wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 15
-            #                     print(f"⚠️ Flood control exceeded. Ждём {wait_time} секунд...")
-            #                     await asyncio.sleep(wait_time)
-
-
-            # # ✅ Прерываем цикл после успешного получения полного ответа
-            # if collected_text and not finished:
-            #     finished = True
-                
-            #     await message.edit_text(collected_text)
+            # Получаем сообщения после завершения run
+            messages = client.beta.threads.messages.list(thread_id=thread_id)
+            last_message = messages.data[0]  # обычно последнее — ответ
+            collected_text = last_message.content[0].text.value
             
-            collected_text = response.content[0].text
-            #collected_text = response.choices[0].message.content
+            try:
+                client.beta.threads.delete(thread_id=thread_id)
+                logging.info(f"🗑️ Thread удалён: {thread_id}")
+
+            except Exception as e:
+                logging.warning(f"Не удалось удалить thread: {e}")
+                
 
             # ✅ Логируем полный ответ для анализа
             print(f"🔎 FULL RESPONSE:\n{collected_text}")
@@ -1300,14 +1524,14 @@ async def check_translation(original_text, user_translation, update: Update, con
                 except ValueError:
                     print(f"⚠️ Не удалось привести score_str к числу: {score_str}")
                     print(f"⚠️ GPT вернул некорректный формат оценки. Запрашиваем повторную оценку...")
-                    reassessed_score = await recheck_score_only(client, original_text, user_translation)
+                    reassessed_score = await recheck_score_only(client_recheck, original_text, user_translation)
                     print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
                     score = reassessed_score
                     break  # завершаем цикл успешно
 
                 if score_int == 0:
                     print(f"⚠️ GPT поставил 0. Запрашиваем повторную оценку...")
-                    reassessed_score = await recheck_score_only(client, original_text, user_translation)
+                    reassessed_score = await recheck_score_only(client_recheck, original_text, user_translation)
                     print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
                     score = reassessed_score
                     break
@@ -1402,13 +1626,6 @@ async def check_translation(original_text, user_translation, update: Update, con
     logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
 
     return result_text, categories, subcategories, score, correct_translation
-
-# except TelegramError as e:
-#     if 'flood control' in str(e).lower():
-#         wait_time = int(re.search(r'\d+', str(e)).group()) if re.search(r'\d+', str(e)) else 5
-#         wait_time = min(wait_time,30) # Ограничиваем максимум до 30 секунд
-#         print(f"⚠️ Flood control exceeded. Retrying in {wait_time} seconds...")
-#         await asyncio.sleep(wait_time)
 
 
 async def handle_explain_request(update: Update, context: CallbackContext):
@@ -2204,8 +2421,12 @@ def escape_markdown_v2(text):
 
 # 📌📌📌📌📌
 async def send_me_analytics_and_recommend_me(context: CallbackContext):
-    client = openai.AsyncOpenAI(api_key=openai.api_key)
-    
+    #client = openai.AsyncOpenAI(api_key=openai.api_key)
+    task_name = f"send_me_analytics_and_recommend_me"
+    system_instruction = f"send_me_analytics_and_recommend_me"
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+            
+
     #get all user_id's from _DB to itterate over them and send them recommendations
     with get_db_connection() as conn:
         with conn.cursor() as cursor:
@@ -2229,26 +2450,53 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
                     result = cursor.fetchone()
                     username = result[0] if result else "Unknown User"
 
-            # ✅ Запрашиваем тему у OpenAI
-            prompt = f"""
-            Ты эксперт по изучению грамматики немецкого языка.  
-            Пользователь допустил следующие ошибки:  
+                # ✅ Создаём новый thread каждый раз
+                thread = client.beta.threads.create()
+                thread_id = thread.id
 
+            # ✅ Запрашиваем тему у OpenAI
+            user_message = f"""
             - **Категория ошибки:** {top_mistake_category}  
             - **Первая подкатегория:** {top_mistake_subcategory_1}  
             - **Вторая подкатегория:** {top_mistake_subcategory_2}  
-
-            Определи для пользователя тему грамматики для проработки и изучение на основе этих данных (например, "Plusquamperfekt"). 
-            **Выводи только одно слово или короткую фразу**.
             """
 
             for attempt in range(5):
                 try:
-                    response = await client.chat.completions.create(
-                    model="gpt-4-turbo",
-                    messages=[{"role": "user", "content": prompt}]
+                    client.beta.threads.messages.create(
+                    thread_id=thread_id,
+                    role="user",
+                    content=user_message
+                )
+
+                    run = client.beta.threads.runs.create(
+                        thread_id=thread_id,
+                        assistant_id=assistant_id
                     )
-                    topic = response.choices[0].message.content.strip()
+                    while True:
+                        run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                        if run_status.status == "completed":
+                            break
+                        await asyncio.sleep(1)  # подожди чуть-чуть
+
+                    # Получаем сообщения после завершения run
+                    messages = client.beta.threads.messages.list(thread_id=thread_id)
+                    last_message = messages.data[0]  # обычно последнее — ответ
+                    topic = last_message.content[0].text.value
+
+                    # response = await client.chat.completions.create(
+                    # model="gpt-4-turbo",
+                    # messages=[{"role": "user", "content": prompt}]
+                    # )
+                    # topic = response.choices[0].message.content.strip()
+                    
+                    try:
+                        client.beta.threads.delete(thread_id=thread_id)
+                        logging.info(f"🗑️ Thread удалён: {thread_id}")
+
+                    except Exception as e:
+                        logging.warning(f"Не удалось удалить thread: {e}")
+
                     print(f"📌 Определена тема: {topic}")
                     break
                 except openai.RateLimitError:
