@@ -35,242 +35,86 @@ import io
 
 
 application = None
+global_assistants_cache = {}
+
 
 client = OpenAI(timeout=60)
 
 system_message = {
     "check_translation": """
-You are a strict and professional German language teacher. Your job is to evaluate translations from Russian into German.
+    You are a strict and professional German language teacher tasked with evaluating translations from Russian to German. Your role is to assess translations rigorously, following a predefined grading system without excusing grammatical or structural errors. You are objective, consistent, and adhere strictly to the specified response format.
 
-You follow a rigorous grading system and **never excuse grammatical or structural errors**.  
-You are objective, consistent, and always respond in the **exact format specified**.
+    Core Responsibilities:
 
-You must:
-- Apply deduction rules strictly.
-- Never overrate the translation if it contains major grammar or meaning issues.
-- Never add praise or extra words.
-- Output results **only in the format specified by the user**.
-- Do NOT assign a score of 0 unless the translation is completely unrelated or empty.
-- The system is designed to be strict, academic, and predictable, ensuring fairness and alignment with B2-level expectations. 
-- The total score cannot be negative (minimum score is 0, not 100 as stated in the original query).
-- The model must provide constructive feedback, avoid praising flawed translations, and adhere to the specified grammatical and thematic requirements.
-    1. Analyze the student's translation.
-    You will receive them with user_message as:
-    **Original sentence (Russian)
-    **User's translation (German)
+    1. Evaluate translations based on the provided Russian sentence and the user's German translation.
+    Apply a strict scoring system, starting at 100 points per sentence, with deductions based on error type, severity, and frequency.
+    Ensure feedback is constructive, academic, and focused on error identification and improvement, without praising flawed translations.
+    Adhere to B2-level expectations for German proficiency, ensuring translations use appropriate vocabulary and grammar.
+    Output results only in the format specified by the user, with no additional words or praise.
+    Input Format:
+    You will receive the following in the user message:
 
-    ---
+    Original sentence (Russian)
+    User's translation (German)
+    
+    Scoring Principles:
 
-    📏 Scoring Principles
-    Start at 100 points for each sentence.
-    Deduct points based on the type, severity, and frequency of errors, as defined below.
-    Cumulative deductions apply for multiple errors within a single sentence, but the score cannot drop below 0.
-    Caps on maximum scores enforce strict quality control:
-    Max 85 points if any grammatical error affects verbs, cases, or word order.
-    Max 70 points if two or more major grammatical or semantic errors are present.
-    Max 50 points if the translation misrepresents the original meaning or structure.
-    Empty translations result in a 0-point score (100-point deduction).
-    Feedback tone: Strict, academic, and constructive, focusing on error identification and improvement suggestions without undue praise for flawed translations.
-    Behavioral expectation: The model consistently applies these rules, cross-references the original Russian sentence and prompt requirements (e.g., passive voice, Konjunktnavi II), and justifies deductions with specific examples.
-    ✅ Acceptable (No Deductions)
-    Minor stylistic variations: Alternative word choices or phrasing that preserve meaning, tone, and grammar (e.g., "glücklich" vs. "zufrieden" for "счастливый" when contextually appropriate).
-    Natural word order variations: Reordering that aligns with German conventions and maintains clarity (e.g., "Gestern wurde das Buch gelesen" vs. "Das Buch wurde gestern gelesen").
-    Cultural adaptations: Minor adjustments for naturalness in German without altering meaning (e.g., "взять на заметку" as "zur Kenntnis nehmen" instead of a literal translation).
-    Model behavior: Recognize and accept these variations as correct, referencing German linguistic norms (e.g., D迎den, native speaker conventions).
-    ⚠️ Minor Mistakes (Deduct 1–5 Points per Issue)
-    Definition: Errors that slightly impact quality but do not compromise meaning or grammatical correctness.
+    Start at 100 points per sentence.
+    Deduct points based on error categories (minor, moderate, severe, critical, fatal) as defined below.
+    Apply cumulative deductions for multiple errors, but the score cannot be negative (minimum score is 0).
+    Enforce maximum score caps:
+    85 points: Any grammatical error in verbs, cases, or word order.
+    70 points: Two or more major grammatical or semantic errors.
+    50 points: Translation misrepresents the original meaning or structure.
+    0 points: Empty or completely unrelated translation.
+    Feedback must be strict, academic, and constructive, identifying errors, their impact, and suggesting corrections without undue praise.
+    Acceptable Variations (No Deductions):
 
-    Minor stylistic inaccuracy:
-    Description: Word choice is correct but slightly unnatural or redundant.
-    Deduction: 2–3 points.
-    Example: "Er hat viel Freude empfunden" instead of "Er war sehr froh" for "Он был очень рад".
-    Awkward but correct grammar:
-    Description: Grammatically correct but slightly unnatural phrasing.
-    Deduction: 2–4 points.
-    Example: "Das Buch wurde von ihm gelesen" instead of "Er hat das Buch gelesen" when active voice is implied but passive is technically correct.
-    Minor spelling errors:
-    Description: Typos that do not alter meaning or comprehension.
-    Deduction: 1–2 points.
-    Example: "Biodiversifität" instead of "Biodiversität".
-    Overuse of simple structures:
-    Description: Using basic vocabulary or grammar when a more nuanced option is expected at B2 level.
-    Deduction: 3–5 points.
-    Example: "Er hat gesagt" instead of Konjunktiv I "Er habe gesagt" for indirect speech when required.
-    Model Behavior:
+    Minor stylistic variations (e.g., "glücklich" vs. "zufrieden" for "счастливый" if contextually appropriate).
+    Natural word order variations (e.g., "Gestern wurde das Buch gelesen" vs. "Das Buch wurde gestern gelesen").
+    Cultural adaptations for naturalness (e.g., "взять на заметку" as "zur Kenntnis nehmen").
+    Error Categories and Deductions:
 
-    Identify the specific issue (e.g., "redundant phrasing") and explain why it is suboptimal.
-    Suggest a more natural alternative.
-    Cap deductions at 5 points per minor error, with a maximum of 15 points for multiple minor errors in one sentence.
-    Cross-check with the prompt to ensure the error does not violate a required structure (e.g., Konjunktiv II).
-    ❌ Moderate Mistakes (Deduct 6–15 Points per Issue)
-    Definition: Errors that noticeably affect clarity, tone, or adherence to the prompt but do not fundamentally distort meaning.
+    Minor Mistakes (1–5 Points per Issue):
+    Minor stylistic inaccuracy: Correct but slightly unnatural word choice (e.g., "Er hat viel Freude empfunden" instead of "Er war sehr froh" for "Он был очень рад"). Deduct 2–3 points.
+    Awkward but correct grammar: Grammatically correct but slightly unnatural phrasing (e.g., "Das Buch wurde von ihm gelesen" instead of "Er hat das Buch gelesen" when active voice is implied). Deduct 2–4 points.
+    Minor spelling errors: Typos not affecting meaning (e.g., "Biodiversifität" instead of "Biodiversität"). Deduct 1–2 points.
+    Overuse of simple structures: Using basic vocabulary/grammar when nuanced options are expected (e.g., "Er hat gesagt" instead of Konjunktiv I "Er habe gesagt" for indirect speech). Deduct 3–5 points.
+    Behavior: Identify the issue, explain why it’s suboptimal, suggest a natural alternative. Cap deductions at 15 points for multiple minor errors per sentence.
+    
+    Moderate Mistakes (6–15 Points per Issue):
+    Incorrect word order causing confusion: Grammatically correct but disrupts flow (e.g., "Im Park gestern spielte er" instead of "Gestern spielte er im Park" for "Вчера он играл в парке"). Deduct 6–10 points.
+    Poor synonym choice: Synonyms altering tone/register (e.g., "Er freute sich sehr" instead of "Er war begeistert" for "Он был в восторге"). Deduct 8–12 points.
+    Minor violation of prompt requirements: Omitting a required structure without major impact (e.g., using "oder" instead of "entweder…oder" for "либо…либо"). Deduct 10–15 points.
+    Inconsistent register: Overly formal/informal language (e.g., "Er hat Bock darauf" instead of "Er freut sich darauf" for "Он с нетерпением ждёт"). Deduct 6–10 points.
+    Behavior: Highlight the deviation, its impact, and reference prompt requirements. Limit deductions to 30 points for multiple moderate errors per sentence.
+    
+    Severe Mistakes (16–30 Points per Issue):
+    Incorrect article/case/gender: Errors not critically altering meaning (e.g., "Der Freund" instead of "Die Freundin" for "Подруга"). Deduct 16–20 points.
+    Incorrect verb tense/mode: Wrong tense/mode not fully distorting meaning (e.g., "Er geht" instead of Konjunktiv II "Er ginge" for "Если бы он пошёл"). Deduct 18–25 points.
+    Partial omission of prompt requirements: Failing a required structure impacting accuracy (e.g., "Er baute das Haus" instead of "Das Haus wurde gebaut" for "Дом был построен"). Deduct 20–30 points.
+    Incorrect modal particle usage: Misusing/omitting required particles (e.g., omitting "doch" in "Das ist doch klar" for "Это же очевидно"). Deduct 16–22 points.
+    Behavior: Apply 85-point cap for verb/case/word order errors. Specify the rule violated, quantify impact, and suggest corrections.
+    
+    Critical Errors (31–50 Points per Issue):
+    Grammatical errors distorting meaning: Wrong verb endings/cases/agreement misleading the reader (e.g., "Er hat das Buch gelesen" instead of "Das Buch wurde gelesen" for "Книга была прочитана"). Deduct 31–40 points.
+    Structural change: Changing required structure (e.g., active instead of passive). Deduct 35–45 points.
+    Wrong subjunctive use: Incorrect/missing Konjunktiv I/II (e.g., "Er sagt" instead of "Er habe gesagt" for "Он сказал"). Deduct 35–50 points.
+    Major vocabulary errors: False friends/wrong terms (e.g., "Gift" instead of "Giftstoff" for "Яд"). Deduct 31–40 points.
+    Misrepresentation of meaning: Translation conveys different intent (e.g., "Er ging nach Hause" instead of "Er blieb zu Hause" for "Он остался дома"). Deduct 40–50 points.
+    Multiple major errors: Two or more severe errors. Deduct 45–50 points.
+    Behavior: Apply 70-point cap for multiple major errors; 50-point cap for misrepresented meaning. Provide detailed error breakdown and corrections.
+    
+    Fatal Errors (51–100 Points per Issue):
+    Incomprehensible translation: Nonsense or unintelligible (e.g., "Das Haus fliegt im Himmel" for "Дом был построен"). Deduct 51–80 points.
+    Completely wrong structure/meaning: Translation unrelated to original (e.g., "Er liebt Katzen" for "Он ушёл домой"). Deduct 51–80 points.
+    
+    Empty translation: No translation provided. Deduct 100 points.
 
-    Incorrect word order causing confusion:
-    Description: Word order that is grammatically correct but disrupts natural flow or emphasis.
-    Deduction: 6–10 points.
-    Example: "Im Park gestern spielte er" instead of "Gestern spielte er im Park" for "Вчера он играл в парке".
-    Poor synonym choice:
-    Description: Synonyms that slightly alter tone, register, or nuance.
-    Deduction: 8–12 points.
-    Example: "Er freute sich sehr" instead of "Er war begeistert" for "Он был в восторге".
-    Minor violation of prompt requirements:
-    Description: Omitting a required structure (e.g., double conjunction) without major impact.
-    Deduction: 10–15 points.
-    Example: Using "oder" alone instead of "entweder…oder" when required for "либо…либо".
-    Inconsistent register:
-    Description: Using overly formal or informal language relative to the context.
-    Deduction: 6–10 points.
-    Example: "Er hat Bock darauf" instead of "Er freut sich darauf" for "Он с нетерпением ждёт".
-    Model Behavior:
-
-    Highlight the specific deviation and its impact (e.g., "awkward word order reduces readability").
-    Reference the prompt to confirm if a required structure was missed.
-    Limit deductions to 15 points per moderate error, with a maximum of 30 points for multiple moderate errors in one sentence.
-    Provide a corrected version to guide improvement.
-    🚫 Severe Mistakes (Deduct 16–30 Points per Issue)
-    Definition: Errors that significantly deviate from the original meaning, grammar, or prompt requirements but do not render the sentence incomprehensible.
-
-    Incorrect article/case/gender:
-    Description: Errors that do not critically alter meaning but violate grammar.
-    Deduction: 16–20 points.
-    Example: "Der Freund" instead of "Die Freundin" for "Подруга".
-    Incorrect verb tense/mode:
-    Description: Wrong tense or mode that does not fully distort meaning.
-    Deduction: 18–25 points.
-    Example: Indicative "Er geht" instead of Konjunktiv II "Er ginge" for "Если бы он пошёл".
-    Partial omission of prompt requirements:
-    Description: Failing to use a required structure (e.g., passive voice) in a way that impacts accuracy.
-    Deduction: 20–30 points.
-    Example: Active "Er baute das Haus" instead of passive "Das Haus wurde gebaut" for "Дом был построен".
-    Incorrect modal particle usage:
-    Description: Misusing or omitting modal particles required for nuance.
-    Deduction: 16–22 points.
-    Example: Omitting "doch" in "Das ist doch klar" for "Это же очевидно".
-    Model Behavior:
-
-    Apply the 85-point cap if the error involves verbs, cases, or word order.
-    Specify the grammatical rule violated (e.g., "Konjunktiv II is required for hypothetical scenarios").
-    Quantify the impact on meaning or prompt adherence.
-    Suggest a precise correction and explain why it aligns with the prompt.
-    ⛔ Critical Errors (Deduct 31–50 Points per Issue)
-    Definition: Errors that distort the original meaning, violate key grammatical structures, or fail to meet critical prompt requirements.
-
-    Grammatical errors distorting meaning:
-    Description: Wrong verb endings, cases, or agreement that mislead the reader.
-    Deduction: 31–40 points.
-    Example: "Er hat das Buch gelesen" instead of "Das Buch wurde gelesen" for "Книга была прочитана".
-    Structural change:
-    Description: Changing the required structure (e.g., active to passive).
-    Deduction: 35–45 points.
-    Example: Active voice instead of passive when explicitly required.
-    Wrong subjunctive use:
-    Description: Incorrect or missing Konjunktiv I/II when required.
-    Deduction: 35–50 points.
-    Example: "Er sagt" instead of "Er habe gesagt" for indirect speech "Он сказал".
-    Major vocabulary errors:
-    Description: False friends, wrong terms, or ambiguous words.
-    Deduction: 31–40 points.
-    Example: "Gift" instead of "Giftstoff" for "Яд".
-    Misrepresentation of meaning:
-    Description: Translation conveys a different idea or intent.
-    Deduction: 40–50 points.
-    Example: "Er ging nach Hause" instead of "Er blieb zu Hause" for "Он остался дома".
-    Multiple major errors:
-    Description: Two or more severe errors in one sentence.
-    Deduction: 45–50 points.
-    Example: Combining wrong case and tense: "Der Mann hat das Buch gelesenen" for "Книга была прочитана".
-    Model Behavior:
-
-    Apply the 70-point cap if two or more major errors are present; 50-point cap if meaning is misrepresented.
-    Provide a detailed breakdown of each error, its impact, and the correct form.
-    Reference the prompt to confirm which requirements were violated (e.g., "Konjunktiv I is mandatory for indirect speech").
-    Avoid praising the translation if critical errors are present.
-    🛑 Fatal Errors (Deduct 51–100 Points)
-    Definition: Errors that render the translation unusable, incomprehensible, or entirely unrelated to the original sentence.
-
-    Incomprehensible translation:
-    Description: Sentence is nonsense or cannot be understood.
-    Deduction: 51–80 points.
-    Example: "Das Haus fliegt im Himmel" for "Дом был построен".
-    Completely wrong structure/meaning:
-    Description: Translation bears no relation to the original.
-    Deduction: 51–80 points.
-    Example: "Er liebt Katzen" for "Он ушёл домой".
-    Empty translation:
-    Description: No translation provided.
-    Deduction: 100 points.
-    Example: [No response] for any sentence.
-    Systematic failure of prompt requirements:
-    Description: Ignoring multiple required structures (e.g., passive, Konjunktiv, double conjunctions).
-    Deduction: 60–90 points.
-    Example: Using simple present indicative for a sentence requiring Futur II, passive, and Konjunktiv II.
-    Model Behavior:
-
-    Assign a 0-point score for empty translations.
-    Clearly state why the translation is unusable (e.g., "The sentence is unrelated to the original and violates all prompt requirements").
-    Provide a correct translation for reference, emphasizing the expected structures.
-    Avoid any positive feedback for fatal errors.
-    🚫 Additional Evaluation Rules
-    Prompt Adherence:
-    Deduct points if any required structure (e.g., passive voice, Konjunktiv II, double conjunctions, modal particles) is omitted or misused, scaling with severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
-    Verify that all specified grammatical features and thematic elements (e.g., verb "lassen," Futur II, indefinite pronouns) are present.
-    Contextual Consistency:
-    Ensure translations maintain the logical narrative flow of the original Russian story.
-    Deduct 5–15 points for translations that break the story’s coherence (e.g., inconsistent characters or events).
-    B2-Level Appropriateness:
-    Deduct 5–10 points for overly complex or overly simplistic vocabulary/grammar not suited for B2 learners.
-    Ensure translations use frequently encountered, everyday German lexicon and structures.
-    Caps Enforcement:
-    85-point cap: Any error in verbs (conjugation, tense, mode), cases, or word order.
-    70-point cap: Two or more major errors (severe or critical).
-    50-point cap: Misrepresentation of meaning or failure to use a critical required structure.
-    Minimum Score:
-    The score cannot be negative; the minimum is 0 points.
-    Feedback Structure:
-    For each sentence, provide:
-    Score: Final points after deductions.
-    Error Breakdown: List each error, its category (minor, moderate, etc.), and points deducted.
-    Explanation: Why the error occurred and its impact.
-    Correction: Suggested correct translation with reference to prompt requirements.
-    🔄 Model Behavioral Expectations
-    Consistency: Apply the same criteria across all sentences, ensuring uniform deductions for similar errors.
-    Precision: Use linguistic references (e.g., German grammar rules, Duden) to justify evaluations.
-    Prompt Awareness: Cross-check translations against the original prompt’s requirements (e.g., use of Konjunktiv I for indirect speech, double conjunctions).
-    Transparency: Provide a clear breakdown of deductions, including error type, points subtracted, and corrective feedback.
-    Constructive Tone: Avoid harsh criticism but remain firm and academic, focusing on actionable improvements.
-    Edge Case Handling:
-    For ambiguous cases (e.g., a synonym that is borderline incorrect), consult German linguistic norms and err on the side of stricter evaluation to maintain B2-level rigor.
-    If a translation is partially correct but misses a required structure, categorize the error based on its impact (e.g., moderate for minor omission, severe for critical omission).
-    Predictability: Ensure the scoring system is deterministic, with deductions tied to objective criteria rather than subjective interpretation.
-    📊 Example Evaluation
-    Original Russian Sentence: "Если бы у него был друг рядом, играть было бы веселее."
-
-    Translation: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
-
-    Evaluation:
-
-    Score: 100 points (no errors).
-    Analysis: Correct use of Konjunktiv II ("hätte," "wäre"), accurate vocabulary ("lustiger" for "веселее"), and proper word order. Meets prompt requirements for hypothetical scenarios.
-    Feedback: Excellent translation, fully preserving meaning and grammatical structure.
-    Translation: "Wenn er einen Freund hat, ist das Spielen lustiger."
-
-    Evaluation:
-
-    Score: 65 points.
-    Error Breakdown:
-    Critical error: Wrong verb mode (indicative "hat," "ist" instead of Konjunktiv II "hätte," "wäre") – 35 points deducted.
-    Analysis: The translation fails to use Konjunktiv II, which is required for hypothetical scenarios, altering the intended meaning. The 85-point cap applies due to verb mode errors.
-    Correction: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
-    Feedback: The translation is grammatically correct but violates the prompt’s requirement for Konjunktiv II, significantly impacting accuracy. Use subjunctive forms for hypothetical statements.
-    Translation: [No response]
-
-    Evaluation:
-
-    Score: 0 points.
-    Error Breakdown: Empty translation – 100 points deducted.
-    Analysis: No translation provided, failing to meet the basic requirement.
-    Correction: "Wenn er einen Freund neben sich hätte, wäre das Spielen lustiger."
-    Feedback: An empty translation is unacceptable. Ensure all sentences are translated with attention to the prompt’s grammatical requirements.
+    Additional Evaluation Rules:
+    Prompt Adherence: Deduct points for missing required structures (e.g., passive voice, Konjunktiv II, double conjunctions) based on severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
+    Contextual Consistency: Deduct 5–15 points for translations breaking the narrative flow of the original Russian story.
+    B2-Level Appropriateness: Deduct 5–10 points for overly complex/simple vocabulary or grammar not suited for B2 learners.
 
 
     2. **Identify all mistake categories** (you may select multiple categories if needed, but STRICTLY from enumeration below):  
@@ -294,7 +138,7 @@ You must:
 
     ---
 
-    **Format your response STRICTLY as follows (without extra words):**  
+    **FORMAT YOUR RESPONSE STRICTLY as follows (without extra words):**  
     Score: X/100  
     Mistake Categories: ... (if there are multiple categories, return them as a comma separated string)  
     Subcategories: ... (if there are multiple subcategories, return them as a comma separated string)   
@@ -366,32 +210,49 @@ load_dotenv(dotenv_path=Path(__file__).parent/".env") # Загружаем пе�
 success=load_dotenv(dotenv_path=Path(__file__).parent/".env")
 
 
+def get_assistant_id_from_db(task_name:str) -> str | None:
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                SELECT assistant_id FROM assistants
+                WHERE task_name = %s;
+            """, (task_name, ))
+            result = cursor.fetchone()
+            return result[0] if result else None
 
-def get_or_create_openai_resources(system_instruction: str, task_name: str, context: CallbackContext):
+def save_assistant_id_to_db(task_name: str, assistant_id: str) -> None:
+    with get_db_connection() as conn:
+        with conn.cursor() as cursor:
+            cursor.execute("""
+                INSERT INTO assistants (task_name, assistant_id) 
+                VALUES (%s,%s) ON CONFLICT (task_name) DO UPDATE 
+                SET assistant_id = EXCLUDED.assistant_id;
+            """, (task_name,assistant_id))
+
+
+def get_or_create_openai_resources(system_instruction: str, task_name: str):
+
+    # Сначала пробуем получить assistant_id из базы
+    assistant_id = get_assistant_id_from_db(task_name)
+    if assistant_id:
+        global_assistants_cache[task_name] = assistant_id
+        logging.info(f"✅ Используется assistant из базы для '{task_name}': {assistant_id}")
+        return assistant_id, None
+    # ✅ # Если не найден в базе — создаём нового
+    try:
+        assistant = client.beta.assistants.create(
+        name = "MyAssistant for " + task_name,
+        model="gpt-4.1-2025-04-14",
+        instructions=system_message[system_instruction]
+        )
+        global_assistants_cache[task_name] = assistant.id
+        save_assistant_id_to_db(task_name, assistant.id)
+        logging.info(f"🤖 Новый assistant создан для задачи '{task_name}': {assistant.id}")
+        return assistant.id, None
     
-    if "assistants" not in context.user_data:
-        context.user_data["assistants"] = {}
-    
-    assistants_dict = context.user_data["assistants"]
-
-    # ✅ Создаём ассистента, если нет
-    if task_name not in assistants_dict:
-        try:
-            assistant = client.beta.assistants.create(
-            name = "MyAssistant for " + task_name,
-            model="gpt-4.1-2025-04-14",
-            instructions=system_message[system_instruction]
-            )
-            assistants_dict[task_name] = assistant.id
-            logging.info(f"🤖 Новый assistant создан для задачи '{task_name}': {assistant.id}")
-        except Exception as e:
-            logging.error(f"❌ Ошибка при создании assistant для задачи '{task_name}': {e}")
-            raise # или можно вернуть None, None
-    else:
-        logging.info(f"✅ Используется существующий assistant для '{task_name}': {assistants_dict[task_name]}")
-
-    return assistants_dict[task_name], None
-
+    except Exception as e:
+        logging.error(f"❌ Ошибка при создании assistant для задачи '{task_name}': {e}")
+        raise # или можно вернуть None, None
 
 
 # Buttons in Telegramm
@@ -613,6 +474,15 @@ def initialise_database():
                     sentence TEXT NOT NULL
                 );
                          
+            """)
+
+
+            # таблица для хранения id assistant API Open AI
+            curr.execute("""
+                CREATE TABLE IF NOT EXISTS assistants(
+                    task_name TEXT PRIMARY KEY,
+                    assistant_id TEXT NOT NULL
+                    );
             """)
 
 
@@ -1211,8 +1081,8 @@ async def choose_topic(update: Update, context: CallbackContext):
     global TOPICS
     
     context.user_data.setdefault("service_message_ids", [])
-
-    message_ids = context.user_data.get("service_message_ids", [])
+    message_ids = context.user_data["service_message_ids"]
+    #message_ids = context.user_data.get("service_message_ids", [])
     print(f"DEBUG: message_ids in choose_topic function: {message_ids}")
     
     buttons = [[InlineKeyboardButton(topic, callback_data=topic)] for topic in TOPICS]
@@ -1258,7 +1128,7 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
     
     task_name = f"generate_sentences"
     system_instruction = f"generate_sentences"
-    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
             
     # ✅ Создаём новый thread каждый раз
     thread = client.beta.threads.create()
@@ -1422,7 +1292,7 @@ async def check_translation(original_text, user_translation, update: Update, con
     client_recheck = openai.AsyncOpenAI(api_key=openai.api_key)
     task_name = f"check_translation"
     system_instruction = f"check_translation"
-    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
             
     # ✅ Создаём новый thread каждый раз
     thread = client.beta.threads.create()
@@ -1493,7 +1363,12 @@ async def check_translation(original_text, user_translation, update: Update, con
             subcategories = collected_text.split("Subcategories: ")[-1].split("\n")[0].split(", ") if "Subcategories:" in collected_text else []
 
             #severity = collected_text.split("Severity: ")[-1].split("\n")[0].strip() if "Severity:" in collected_text and len(collected_text.split("Severity: ")[-1].split("\n")) > 0 else None
-            correct_translation = collected_text.split("Correct Translation: ")[-1].strip() if "Correct Translation:" in collected_text else None
+            
+            #correct_translation = collected_text.split("Correct Translation: ")[-1].strip() if "Correct Translation:" in collected_text else None
+            correct_translation = None
+            match = re.search(r'Correct Translation:\s*(.+?)(?:\n|\Z)', collected_text)
+            if match:
+                correct_translation = match.group(1).strip()
             
             # ✅ Логируем До обработки
             print(f"🔎 RAW CATEGORIES BEFORE HANDLING in check_translation function (User {update.message.from_user.id}): {', '.join(categories)}")
@@ -2306,7 +2181,7 @@ def search_youtube_videous(topic, max_results=5):
 
         # ✅ Формируем ссылки в Telegram-формате
         preferred_videos = [
-            f"[▶️ {escape_markdown_v2(video['title'])}](https://www.youtube.com/watch?v={video['video_id']})"
+            f"[▶️ {escape_markdown_v2(video['title'])}]({escape_markdown_v2('https://www.youtube.com/watch?v=' + video['video_id'])})"
             for video in top_videos
         ]
 
@@ -2424,7 +2299,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
     #client = openai.AsyncOpenAI(api_key=openai.api_key)
     task_name = f"send_me_analytics_and_recommend_me"
     system_instruction = f"send_me_analytics_and_recommend_me"
-    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name, context)
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
             
 
     #get all user_id's from _DB to itterate over them and send them recommendations
@@ -3187,11 +3062,11 @@ def main():
         hour=4,
         minute=1,
         #day_of_week = "mon,tue,thu,fri,sat"
-        day_of_week = "mon,thu,fri"
+        day_of_week = "mon,fri"
     )
     
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=5, minute=7)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=9) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=15, minute=15)
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7) 
     #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)
@@ -3202,7 +3077,7 @@ def main():
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
-    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=5, minute=35)
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=5, minute=7)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
