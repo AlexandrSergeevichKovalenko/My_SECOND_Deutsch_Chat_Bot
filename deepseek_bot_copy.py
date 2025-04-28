@@ -14,6 +14,7 @@ from telegram import InlineKeyboardButton, InlineKeyboardMarkup, ReplyKeyboardMa
 from telegram.ext import CallbackQueryHandler
 import hashlib
 import re
+import html
 import requests
 import aiohttp
 from telegram.ext import CallbackContext
@@ -187,6 +188,71 @@ You act as a concise, knowledgeable guide, ensuring the recommended topic direct
 while adhering strictly to this instruction format and requirements.
 
 **Provide only one word which describes the user's mistake the best. Give back inly one word or short phrase.**
+""",
+"check_translation_with_claude": """
+You are an expert in Russian and German languages, a professional translator, and a German grammar instructor.
+
+Your task is to analyze the student's translation from Russian to German and provide detailed feedback according to the following criteria:
+
+❗️ Important: Do NOT repeat the original sentence or the translation in your response. Only provide conclusions and explanations.
+
+Analysis Criteria:
+1. Error Identification:
+
+    Identify the main errors and classify each error into one of the following categories:
+
+        Grammar (e.g., noun cases, verb tenses, prepositions, syntax)
+
+        Vocabulary (e.g., incorrect word choice, false friends)
+
+        Style (e.g., formality, clarity, tone)
+
+2. Grammar Explanation:
+
+    Explain why the grammatical structure is incorrect.
+
+    Provide the corrected form.
+
+    If the error concerns verb usage or prepositions, specify the correct form and proper usage.
+
+3. Alternative Sentence Construction:
+
+    Suggest one alternative version of the sentence.
+
+    Note: Only provide the alternative sentence without explanation.
+
+4. Synonyms:
+
+    Suggest up to two synonyms for incorrect or less appropriate words.
+
+    Format: Original Word: …
+    Possible Synonyms: …
+
+🔎 Important Notes:
+Follow the format exactly as specified.
+
+Provide objective, constructive feedback without personal comments.
+
+Avoid introductory or summarizing phrases (e.g., "Here’s my analysis...").
+
+Keep the response clear, concise, and structured.
+
+Provided Information:
+You will receive:
+Original Sentence (in Russian)
+User's Translation (in German)
+
+Response Format (STRICTLY FOLLOW THIS):
+
+Error 1: (OBLIGATORY: Brief description of the grammatical, lexical, or stylistic error)
+Error 2: (OBLIGATORY: Brief description of the grammatical, lexical, or stylistic error)
+Error 3: (OBLIGATORY: Brief description of the grammatical, lexical, or stylistic error)
+Correct Translation: …
+Grammar Explanation:
+Alternative Sentence Construction: …
+Synonyms:
+Original Word: …
+Possible Synonyms: … (maximum two)
 """
 }
 
@@ -256,8 +322,24 @@ def get_or_create_openai_resources(system_instruction: str, task_name: str):
 
 
 # Buttons in Telegramm
-TOPICS = ["Business", "Medicine", "Hobbies", "Free Time", "Education",
-    "Work", "Travel", "Science", "Technology", "Everyday Life", "Random sentences", "News"]
+TOPICS = [
+    "💼 Business",
+    "🏥 Medicine",
+    "🎨 Hobbies",
+    "✈️ Travel",
+    "🔬 Science",
+    "💻 Technology",
+    "🖼️ Art",
+    "🎓 Education",
+    "🍽️ Food",
+    "⚽ Sports",
+    "🌿 Nature",
+    "🎵 Music",
+    "📚 Literature",
+    "🧠 Psychology",
+    "🏛️ History",
+    "📰 News"
+]
 
 
 # Получи ключ на https://console.cloud.google.com/apis/credentials
@@ -997,8 +1079,8 @@ async def done(update: Update, context: CallbackContext):
     total_sentences = cursor.fetchone()[0]
     logging.info(f"🔄 Ожидаем записи всех переводов пользователя {user_id}. Всего предложений: {total_sentences}")
 
-    # ⏳ Ждём до 120 секунд, пока все переводы не будут записаны
-    max_retries = 120
+    # ⏳ Ждём до 150 секунд, пока все переводы не будут записаны
+    max_retries = 150
     for i in range(0, max_retries, 5):
         cursor.execute("""
             SELECT COUNT(*) FROM translations_deepseek
@@ -1085,7 +1167,15 @@ async def choose_topic(update: Update, context: CallbackContext):
     #message_ids = context.user_data.get("service_message_ids", [])
     print(f"DEBUG: message_ids in choose_topic function: {message_ids}")
     
-    buttons = [[InlineKeyboardButton(topic, callback_data=topic)] for topic in TOPICS]
+    buttons = []
+    row = []
+    for i, topic in enumerate(TOPICS, 1):
+        row.append(InlineKeyboardButton(topic, callback_data=topic))
+        if i % 2 == 0:
+            buttons.append(row)
+            row = []
+    if row:  # если остались кнопки, которые не кратны 3 (например 10 тем — 9 + 1)
+        buttons.append(row)
     #example of buttons
     #[
     #[InlineKeyboardButton("Business", callback_data="Business")],
@@ -1442,11 +1532,11 @@ async def check_translation(original_text, user_translation, update: Update, con
 
     # ✅ Убираем лишние пробелы для ровного форматирования
     result_text = f"""
-🟢 Sentence number: {str(sentence_number)}\n
-✅ Score: {str(score)}/100\n
-🔵 Original Sentence: {escape_markdown(original_text)}\n
-🟡 User Translation: {escape_markdown(user_translation)}\n
-🟣 Correct Translation: {escape_markdown(correct_translation)}\n
+🟢 *Sentence number:* {sentence_number}\n
+✅ *Score:* {score}/100\n
+🔵 *Original Sentence:* {original_text}\n
+🟡 *User Translation:* {user_translation}\n
+🟣 *Correct Translation:* {correct_translation}\n
 """
 #             # ✅ Убираем лишние пробелы для ровного форматирования
 #             result_text = f"""
@@ -1468,8 +1558,8 @@ async def check_translation(original_text, user_translation, update: Update, con
     # ✅ Отправляем текст в Telegram с поддержкой Markdown
     sent_message = await context.bot.send_message(
         chat_id=update.message.chat_id,
-        text=result_text,
-        parse_mode=None
+        text=escape_html_with_bold(result_text),
+        parse_mode="HTML"
     )
 
     message_id = sent_message.message_id
@@ -1495,7 +1585,11 @@ async def check_translation(original_text, user_translation, update: Update, con
     await asyncio.sleep(1.5)
 
     # ✅ Редактируем сообщение, добавляем кнопку
-    await sent_message.edit_text(result_text, reply_markup=reply_markup)                        
+    await sent_message.edit_text(
+        text=escape_html_with_bold(result_text),
+        reply_markup=reply_markup,
+        parse_mode="HTML"
+        )                        
 
     # ✅ Логируем успешную проверку
     logging.info(f"✅ Перевод проверен для пользователя {update.message.from_user.id}")
@@ -1560,13 +1654,16 @@ async def handle_explain_request(update: Update, context: CallbackContext):
       
         # ✅ Логируем попытку отправки комментария
         print(f"📩 Sending reply to message with message_id: {message_id} in chat ID: {chat_id}")
+        escaped_explanation = escape_html_with_bold(explanation)
 
+        print(f"explanation from handle_explain_request_function before escape_html_with_bold: {explanation}")
+        print(f"explanation from handle_explain_request_function after escape_html_with_bold: : {escaped_explanation}")
 
         # ✅ Отправляем ответ как комментарий к сообщению
         await context.bot.send_message(
             chat_id=chat_id,
-            text=explanation,
-            parse_mode="Markdown",
+            text=escaped_explanation,
+            parse_mode="HTML",
             reply_to_message_id=message_id  # 🔥 ПРИКРЕПЛЯЕМСЯ К СООБЩЕНИЮ
             )
         
@@ -1590,59 +1687,25 @@ async def handle_explain_request(update: Update, context: CallbackContext):
 
 #✅ Explain with Claude
 async def check_translation_with_claude(original_text, user_translation, update, context):
+    task_name = f"check_translation_with_claude"
+    system_instruction = f"check_translation_with_claude"
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
+            
+    # ✅ Создаём новый thread каждый раз
+    thread = client.beta.threads.create()
+    thread_id = thread.id
+
     if update.callback_query:
         user = update.callback_query.from_user
         chat_id = update.callback_query.message.chat_id
     else:
         logging.error("❌ Нет callback_query в update!")
         return None, None
-    client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
+    #this client is for Claude
+    #client = AsyncAnthropic(api_key=CLAUDE_API_KEY)
 
-    prompt = f"""
-    You are an expert in Russian and German languages, a professional translator, and a German grammar instructor.
-    Your task is to analyze the student's translation from Russian to German and provide detailed feedback according to the following criteria:
-    ❗ Do NOT repeat the original text or the translation in your response — only provide conclusions and explanations.
-    Analysis Criteria:
-    1. Errors:
-
-    - Identify the key errors in the translation and classify them into the following categories:
-        - Grammar (nouns, cases, verbs, tenses, prepositions, etc.)
-        - Vocabulary (incorrect word choice, false friends, etc.)
-        - Style (formal/informal register, clarity, tone, etc.)
+    user_message = f"""
     
-    - Grammar Explanation:
-        - Explain why the grammatical structure in the phrase is incorrect.
-        - Provide a corrected version of the structure.
-        - If the error is related to verb usage or prepositions, specify the correct form and usage.
-        
-    - Alternative Sentence Construction:
-        - Suggest one alternative construction of the sentence.
-        - Explain how the alternative differs in tone, formality, or meaning.
-   
-    - Synonyms:
-        - Suggest possible synonyms for incorrect or less appropriate words.
-        - Provide no more than two alternatives.
-    ----------------------
-    **Response Format**:
-    **The response must follow this strict structured format**:
-    Error 1: (Grammatical or lexical or stylistic error)
-    Error 2: (Grammatical or lexical or stylistic error)
-    Correct Translation: …
-    Grammar Explanation:
-    Alternative Sentence Construction:(just a Alternative Sentence Construction without explanation)
-    Synonyms:
-    Original Word: …
-    Possible Synonyms: … (no more than two)
-    
-    -------------------
-    🔎 Important Instructions:
-
-    Follow the specified format strictly.
-    Provide objective and constructive feedback.
-    Do NOT add introductory phrases (e.g., "Here’s what I think...").
-    The response should be clear and concise.
-
-    Below you can find:
     **Original sentence (Russian):** "{original_text}"
     **User's translation (German):** "{user_translation}"
 
@@ -1651,21 +1714,53 @@ async def check_translation_with_claude(original_text, user_translation, update,
     # logging.info(f"📢 Available models: {available_models}")
     # print(f"📢 Available models: {available_models}")
     
-    model_name = "claude-3-7-sonnet-20250219"  
+    #model_name = "claude-3-7-sonnet-20250219"  
     
     for attempt in range(3):
         try:
-            response = await client.messages.create(
-                model=model_name,
-                messages=[{"role": "user", "content": prompt}],
-                max_tokens=500,
-                temperature=0.2
-            )
+            #it is correct working with Claude model
+            # response = await client.messages.create(
+            #     model=model_name,
+            #     messages=[{"role": "user", "content": prompt}],
+            #     max_tokens=500,
+            #     temperature=0.2
+            # )
             
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=user_message
+            )
+
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+                await asyncio.sleep(1)  # подожди чуть-чуть
+            
+
+            # Получаем сообщения после завершения run
+            messages = client.beta.threads.messages.list(thread_id=thread_id)
+            last_message = messages.data[0]  # обычно последнее — ответ
+            response = last_message.content[0].text.value
+
+            try:
+                client.beta.threads.delete(thread_id=thread_id)
+                logging.info(f"🗑️ Thread удалён: {thread_id}")
+
+            except Exception as e:
+                logging.warning(f"Не удалось удалить thread: {e}")
+
             logging.info(f"📥 FULL RESPONSE BODY: {response}")
 
             if response:
-                cloud_response = response.content[0].text
+                cloud_response = response
+                #this is for the claude model
+                #cloud_response = response.content[0].text
                 break
             else:
                 logging.warning("⚠️ Claude returned an empty response.")
@@ -1687,43 +1782,47 @@ async def check_translation_with_claude(original_text, user_translation, update,
         return "❌ Ошибка: Не удалось обработать ответ от Claude."
     
     list_of_errors_pattern = re.findall(r'(Error)\s*(\d+)\:*\s*(.+?)(?:\n|$)', cloud_response, flags=re.DOTALL)
+
     correct_translation = re.findall(r'(Correct Translation)\:\s*(.+?)(?:\n|$)', cloud_response, flags=re.DOTALL)
-    grammar_explanation_pattern = re.findall(r'(Grammar Explanation)\s*\:*\n(.+?)(?=Alternative Sentence Construction|Synonyms|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
+
+    grammar_explanation_pattern = re.findall(r'(Grammar Explanation)\s*\:*\s*\n*(.+?)(?=\n[A-Z][a-zA-Z\s]+:|\Z)',cloud_response,flags=re.DOTALL | re.IGNORECASE)
+
     altern_sentence_pattern = re.findall(r'(Alternative Construction|Alternative Sentence Construction)\:*\s*(.+?)(?=Synonyms|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
-    synonyms_pattern = re.findall(r'Synonyms\:*\n(.+)(?=\n[A-Z][a-zA-Z\s]+:|$)', cloud_response, flags=re.DOTALL | re.IGNORECASE)
+    #(?:\n[A-Z][a-zA-Z\s]*\:|\Z) — захватываем до: или до новой строки с новым заголовком (\n + заглавная буква + слово + :) или до конца строки (\Z).
+    synonyms_pattern = re.findall(r'Synonyms\:*\n([\s\S]*?)(?=\Z)',cloud_response,flags=re.DOTALL | re.IGNORECASE)
 
     if not list_of_errors_pattern and not correct_translation:
         logging.error("❌ Claude вернул некорректный формат ответа!")
         return "❌ Ошибка: Не удалось обработать ответ от Claude."
     
     # Собираем результат в список
-    result_list = ["📥 Explanation with Claude:\n", f"💡 Original russian sentence:\n{original_text}\n", f"💡 User translation:\n{user_translation}\n"]
+    result_list = ["📥 *Explanation with Claude*:\n", f"🟢*Original russian sentence*:\n{original_text}\n", f"🟣*User translation*:\n{user_translation}\n"]
 
     # Добавляем ошибки
     for line in list_of_errors_pattern:
-        result_list.append(f"❗ **{line[0]} {line[1]}:** {line[2]}\n")
+        result_list.append(f"🔴*{line[0]} {line[1]}*: {line[2]}\n")
 
     # Добавляем корректный перевод
     for item in correct_translation:
-        result_list.append(f"✅ **{item[0]}:**\n➡️ {item[1]}\n")
+        result_list.append(f"✅*{item[0]}*:\n➡️ {item[1]}\n")
 
     # Добавляем объяснения грамматики
     for k in grammar_explanation_pattern:
-        result_list.append(f"**🟡 {k[0]}:**")  # Добавляем заголовок
+        result_list.append(f"🟡*{k[0]}*:")  # Добавляем заголовок
         grammar_parts = k[1].split("\n")  # Разбиваем текст по строкам
         for part in grammar_parts:
             clean_part = part.strip()
             if clean_part and clean_part not in ["-", ":"]:
-                result_list.append(f"🔎 {clean_part}")
+                result_list.append(f"🔥{clean_part}")
     #result_list.append("\n")    
 
     # Добавляем альтернативные варианты
     for a in altern_sentence_pattern:
-        result_list.append(f"✏️ **{a[0]}:\n** {a[1].strip()}\n")  # Убираем лишние пробелы
+        result_list.append(f"\n🔵*{a[0]}*:\n {a[1].strip()}\n")  # Убираем лишние пробелы
 
     # Добавляем синонимы
     if synonyms_pattern:
-        result_list.append("➡️ Synonyms:")
+        result_list.append("➡️ *Synonyms*:")
         #count = 0
         for s in synonyms_pattern:
             synonym_parts = s.split("\n")
@@ -2143,8 +2242,8 @@ def search_youtube_videous(topic, max_results=5):
 
             for item in responce.get("items", []):
                 title = item["snippet"]["title"]
-                title = title.replace('{', '{{').replace('}', '}}') # Экранирование фигурных скобок
-                title = title.replace('%', '%%') # Экранирование символов % 
+                #title = title.replace('{', '{{').replace('}', '}}') # Экранирование фигурных скобок
+                #title = title.replace('%', '%%') # Экранирование символов % 
                 video_id = item["id"].get("videoId", "") # Безопасное извлечение videoId
                 #video_url = f"https://www.youtube.com/watch?v={video_id}"
                 if video_id:
@@ -2181,10 +2280,11 @@ def search_youtube_videous(topic, max_results=5):
 
         # ✅ Формируем ссылки в Telegram-формате
         preferred_videos = [
-            f"[▶️ {escape_markdown_v2(video['title'])}]({escape_markdown_v2('https://www.youtube.com/watch?v=' + video['video_id'])})"
+            f'<a href="{html.escape("https://www.youtube.com/watch?v=" + video["video_id"])}">▶️ {escape_html_with_bold(video["title"])}</a>'
             for video in top_videos
         ]
 
+        print(f"preferred_videos after escape_html_with_bold: {preferred_videos}")
         return preferred_videos
     
     except Exception as e:
@@ -2284,13 +2384,37 @@ async def check_url(url):
         print(f"❌ Ошибка при проверке ссылки {url}: {e}")
         return False
 
+# Полностью рабочая функция однако не получается экранировать чтобы оставить жирным текст в ** текст**.
+# def escape_markdown_v2(text):
+#     # Экранируем только спецсимволы Markdown
+#     if not isinstance(text, str):
+#         text = str(text)
+#     escape_chars = r'_*[]()~`>#+-=|{}.,!:'
+#     return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
 
-def escape_markdown_v2(text):
-    # Экранируем только спецсимволы Markdown
+def escape_html_with_bold(text):
     if not isinstance(text, str):
         text = str(text)
-    escape_chars = r'_*[]()~`>#+-=|{}.!'
-    return ''.join(f'\\{char}' if char in escape_chars else char for char in text)
+    
+    # Сначала заменим *text* на <b>text</b>
+    bold_pattern = r'\*(.*?)\*'
+    text = re.sub(bold_pattern, r'<b>\1</b>', text)
+    
+    # Теперь экранируем весь остальной текст кроме наших тэгов
+    def escape_except_tags(part):
+        if part.startswith('<b>') and part.endswith('</b>'):
+            # Внутри <b>...</b> тоже нужно экранировать
+            inner = html.escape(part[3:-4])
+            return f"<b>{inner}</b>"
+        else:
+            return html.escape(part)
+    
+    # Разбиваем текст на куски: либо <b>...</b> либо обычный текст
+    #re.split(r'(<b>.*?</b>)', text) работает так:
+    #Разбивает текст вокруг кусков <b>...</b>,И сохраняет сами <b>...</b> в список благодаря скобкам () в регулярке.
+    parts = re.split(r'(<b>.*?</b>)', text)
+    escaped_parts = [escape_except_tags(part) for part in parts]
+    return ''.join(escaped_parts)
 
 
 
@@ -2406,18 +2530,19 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
             rounded_value = round(mistakes_week/total_sentences, 2)
             # ✅ Формируем сообщение для пользователя
             recommendations = (
-                f"🧔 *{escape_markdown_v2(username)},\nВы перевели за неделю:* {escape_markdown_v2(total_sentences)} предложений;\n"
-                f"📌 *В них допущено* {escape_markdown_v2(mistakes_week)} ошибок;\n"
-                f"🚨 *Количество ошибок на одно предложение:* {escape_markdown_v2(f'{rounded_value} штук;')}\n"
-                f"🔴 *Больше всего ошибок* {escape_markdown_v2(number_of_top_category_mistakes)} штук *в категории*:\n {escape_markdown_v2(top_mistake_category) or 'неизвестно'}\n"
+                f"🧔 *{username}*,\nВы *перевели* за неделю: {total_sentences} предложений;\n"
+                f"📌 *В них допущено* {mistakes_week} ошибок;\n"
+                f"🚨 *Количество ошибок на одно предложение:* {rounded_value} штук;\n"
+                f"🔴 *Больше всего ошибок:* {number_of_top_category_mistakes} штук в категории:\n {top_mistake_category or 'неизвестно'}\n"
             )
             if top_mistake_subcategory_1:
-                recommendations += (f"📜 *Основные ошибки в подкатегории:*\n {escape_markdown_v2(top_mistake_subcategory_1)}\n\n")
+                recommendations += (f"📜 *Основные ошибки в подкатегории:*\n {top_mistake_subcategory_1}\n\n")
             if top_mistake_subcategory_2:
-                recommendations += (f"📜 *Вторые по частоте ошибки в подкатегории:*\n {escape_markdown_v2(top_mistake_subcategory_2)}\n\n")
+                recommendations += (f"📜 *Вторые по частоте ошибки в подкатегории:*\n {top_mistake_subcategory_2}\n\n")
             
             # ✅ Добавляем строку с рекомендацией → ЭТО ВАЖНО!
             recommendations += (f"🟢 *Рекомендую посмотреть:*\n\n")
+            recommendations = escape_html_with_bold(recommendations)
 
 
             # ✅ Добавляем рабочие ссылки
@@ -2431,7 +2556,7 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
             await context.bot.send_message(
                 chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, 
                 text=recommendations,
-                parse_mode = "MarkdownV2"
+                parse_mode = "HTML"
                 )
             await asyncio.sleep(5)
 
@@ -2446,8 +2571,8 @@ async def send_me_analytics_and_recommend_me(context: CallbackContext):
             
             await context.bot.send_message(
                 chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID,
-                text=escape_markdown_v2(f"⚠️ Пользователь {username} не перевёл ни одного предложения на этой неделе."),
-                parse_mode="MarkdownV2"
+                text=escape_html_with_bold(f"⚠️ Пользователь {username} не перевёл ни одного предложения на этой неделе."),
+                parse_mode="HTML"
             )
 
 
@@ -3066,7 +3191,7 @@ def main():
     )
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="wed", hour=15, minute=15)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="tue", hour=5, minute=5) 
     #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)

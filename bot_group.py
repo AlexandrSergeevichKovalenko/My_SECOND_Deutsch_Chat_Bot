@@ -20,11 +20,12 @@
 import os
 import logging
 import openai
+from openai import OpenAI
 import psycopg2
 import datetime
 from datetime import datetime, time
 from telegram import Update
-from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler
+from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler, Defaults
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
 import asyncio
@@ -34,13 +35,22 @@ import hashlib
 import re
 import requests
 import aiohttp
+from telegram.ext import CallbackContext
 from googleapiclient.discovery import build
-#import anthropic
-#from anthropic import AsyncAnthropic
 from telegram.error import TelegramError
-from telegram.helpers import escape_markdown, escape_markdown_v2 # Import escape_markdown_v2
+from telegram.helpers import escape_markdown
 import anthropic
 from anthropic import AsyncAnthropic
+from telegram.error import TimedOut, BadRequest
+import tempfile
+import sys
+
+from google.cloud import texttospeech
+import os
+from pathlib import Path
+from dotenv import load_dotenv
+from pydub import AudioSegment
+import io
 
 # Настраиваем логирование
 logging.basicConfig(
@@ -53,7 +63,7 @@ logger = logging.getLogger(__name__)
 #CallbackQueryHandler → ожидает update.callback_query.
 
 application = None
-
+scheduler = None
 
 TOPICS_TELEGRAM = {
     "General": {
@@ -180,12 +190,12 @@ conn.close()
 
 
 # # === Настройки бота ===
-TELEGRAM_DeepSeek_BOT_TOKEN = os.getenv("TELEGRAM_DeepSeek_BOT_TOKEN")
+TELEGRAM_TOKEN = os.getenv("TELEGRAM_TOKEN")
 
-if TELEGRAM_DeepSeek_BOT_TOKEN:
-    logging.info("✅ TELEGRAM_DeepSeek_BOT_TOKEN успешно загружен!")
+if TELEGRAM_TOKEN:
+    logging.info("✅ TELEGRAM_TOKEN успешно загружен!")
 else:
-    logging.error("❌ TELEGRAM_DeepSeek_BOT_TOKEN не загружен! Проверьте переменные окружения.")
+    logging.error("❌ TELEGRAM_TOKEN не загружен! Проверьте переменные окружения.")
 
 # ID группы
 TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = int(os.getenv("TEST_DEEPSEEK_BOT_GROUP_CHAT_ID")) # Получаем как int
@@ -2102,7 +2112,7 @@ def search_youtube_videous(topic, max_results=5):
 
         # ✅ Формируем ссылки в Telegram-формате MarkdownV2
         preferred_videos_markdown = [
-            f"[▶️ {escape_markdown_v2(video.get('title', ''))}]({escape_markdown_v2(f'https://www.youtube.com/watch?v={video.get("video_id")}')})"
+            f"[▶️ {escape_markdown_v2(video['title'])}]({escape_markdown_v2('https://www.youtube.com/watch?v=' + video['video_id'])})"
             for video in top_videos if video.get('video_id')
         ]
 
@@ -2901,77 +2911,161 @@ async def error_handler(update, context):
         logger.error(f"❌ Exception while sending error message: {e}", exc_info=True)
 
 
-def main():
-    global application
-    application = Application.builder().token(TELEGRAM_DeepSeek_BOT_TOKEN).build()
-
-    # 🔹 Добавляем обработчики
-
-    # 🔥 Логирование всех сообщений (группа -1, не блокирует цепочку обработчиков)
+async def main():
+    # Initialize application
+    application = Application.builder().token(TELEGRAM_TOKEN).build()
+    
+    # Initialize scheduler
+    scheduler = AsyncIOScheduler()
+    
+    print("📌 Adding handlers...")
+    # 🔹 Logging for all messages (group -1, non-blocking)
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, log_message, block=False), group=-1)
 
-    # 1. Command Handler: /start
+    # Command handlers
     application.add_handler(CommandHandler("start", start))
-
-    # 2. MessageHandler: Handle user text input (specifically numbered translations)
-    # This should be before the Reply button handlers if translation format might overlap with button text
-    # Or use a higher group number if Reply button handlers should have priority for matching button text
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message, block=False), group=1) # Group 1 for custom text handling
-
-    # 3. MessageHandlers: Handle text matching the ReplyKeyboardMarkup buttons
-    # These should run *after* the general message logging but *before* catch-all handlers if any
-    # Using group 2 to ensure handle_user_message (group 1) has a chance first for numbered translations
-    application.add_handler(MessageHandler(filters.TEXT("📌 Выбрать тему") & ~filters.COMMAND, handle_reply_button_text), group=2)
-    application.add_handler(MessageHandler(filters.TEXT("🚀 Начать перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
-    application.add_handler(MessageHandler(filters.TEXT("📜 Проверить перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
-    application.add_handler(MessageHandler(filters.TEXT("✅ Завершить перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
-    application.add_handler(MessageHandler(filters.TEXT("🟡 Статистика") & ~filters.COMMAND, handle_reply_button_text), group=2)
-
-    # 4. CallbackQueryHandler: Handle Inline button clicks
-    # The pattern filters for 'explain:' but the handler `handle_button_click` also processes other inline button clicks
-    # It's better to have a generic CallbackQueryHandler and route inside the function
-    application.add_handler(CallbackQueryHandler(handle_button_click)) # Process all inline button clicks
-
-    # 5. Command Handler: /stats (as an alternative to the Reply button)
-    application.add_handler(CommandHandler("stats", user_stats)) # User stats command
-
-    # 6. Error Handler
+    application.add_handler(CommandHandler("stats", user_stats))
+    
+    # Message handlers for user text input
+    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, handle_user_message, block=False), group=1)
+    
+    # Reply keyboard button handlers
+    application.add_handler(MessageHandler(filters.Text("📌 Выбрать тему") & ~filters.COMMAND, handle_reply_button_text), group=2)
+    application.add_handler(MessageHandler(filters.Text("🚀 Начать перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
+    application.add_handler(MessageHandler(filters.Text("📜 Проверить перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
+    application.add_handler(MessageHandler(filters.Text("✅ Завершить перевод") & ~filters.COMMAND, handle_reply_button_text), group=2)
+    application.add_handler(MessageHandler(filters.Text("🟡 Статистика") & ~filters.COMMAND, handle_reply_button_text), group=2)
+    
+    # Inline button handlers
+    application.add_handler(CallbackQueryHandler(handle_button_click))
+    
+    # Error handler
     application.add_error_handler(error_handler)
-
-    # 🔹 APScheduler setup
-    # Use AsyncIOScheduler for async functions
-    scheduler = AsyncIOScheduler()
-
-    # ✅ Добавляем задачи в `scheduler` с использованием AsyncIOScheduler
-    print("📌 Добавляем задачи в scheduler...")
-    # Pass application to context
-    scheduler.add_job(send_morning_reminder,"cron", hour=6, minute=30, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)})
-    # scheduler.add_job(send_morning_reminder,"cron", hour=15, minute=1, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)}) # Example intermediate reminder
-    scheduler.add_job(send_german_news, "cron", hour=6, minute=45, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)})
-    scheduler.add_job(send_me_analytics_and_recommend_me, "cron", day_of_week="mon,wed", hour=7, minute=7, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)}) # Mon and Wed
-
-
-    scheduler.add_job(force_finalize_sessions, "cron", hour=23, minute=59, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)}) # End-of-day cleanup
-
-    # Intermediate daily reports (e.g., 9:05, 14:05, 18:05)
+    
+    # Set up scheduler jobs
+    print("📌 Adding scheduler jobs...")
+    
+    # Morning reminders
+    scheduler.add_job(
+        send_morning_reminder, 
+        "cron", 
+        hour=6, 
+        minute=30, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    # Other scheduled jobs
+    scheduler.add_job(
+        send_german_news, 
+        "cron", 
+        hour=6, 
+        minute=45, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    scheduler.add_job(
+        send_me_analytics_and_recommend_me, 
+        "cron", 
+        day_of_week="mon,wed", 
+        hour=7, 
+        minute=7, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    scheduler.add_job(
+        force_finalize_sessions, 
+        "cron", 
+        hour=23, 
+        minute=59, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    # Progress reports throughout the day
     for hour in [9, 14, 18]:
-        scheduler.add_job(send_progress_report, "cron", hour=hour, minute=5, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)})
-
-    # Final daily summary
-    scheduler.add_job(send_daily_summary, "cron", hour=22, minute=45, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)})
-
-    # Weekly summary (e.g., Sunday evening)
-    scheduler.add_job(send_weekly_summary, "cron", day_of_week="sun", hour=22, minute=55, timezone='Europe/Berlin', kwargs={'context': CallbackContext(application=application)})
-
-
+        scheduler.add_job(
+            send_progress_report, 
+            "cron", 
+            hour=hour, 
+            minute=5, 
+            timezone='Europe/Berlin', 
+            kwargs={'context': CallbackContext(application=application)}
+        )
+    
+    # Daily summary
+    scheduler.add_job(
+        send_daily_summary, 
+        "cron", 
+        hour=22, 
+        minute=45, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    # Weekly summary
+    scheduler.add_job(
+        send_weekly_summary, 
+        "cron", 
+        day_of_week="sun", 
+        hour=22, 
+        minute=55, 
+        timezone='Europe/Berlin', 
+        kwargs={'context': CallbackContext(application=application)}
+    )
+    
+    # Initialize the application
+    print("🔧 Initializing Telegram bot...")
+    await application.initialize()
+    print("✅ Bot initialized.")
+    
+    # Start the scheduler
+    print("⚙️ Starting APScheduler...")
     scheduler.start()
-    print("🚀 Бот запущен! Ожидаем сообщения...")
+    print("✅ APScheduler started.")
+    
+    # Start the bot
+    print("🚀 Starting bot...")
+    await application.start()
+    print("✅ Bot started.")
+    
     # Start polling
-    application.run_polling(allowed_updates=Update.MESSAGE | Update.CALLBACK_QUERY)
-
+    print("📡 Starting polling...")
+    await application.updater.start_polling(
+        allowed_updates=[Update.MESSAGE.value, Update.CALLBACK_QUERY.value, Update.CHAT_MEMBER.value],
+        drop_pending_updates=True
+    )
+    
+    # Keep the application running
+    print("🔄 Bot is running. Press Ctrl+C to stop.")
+    
+    # This will keep the coroutine running until it's interrupted
+    try:
+        # This creates a never-ending task that prevents the coroutine from exiting
+        stopping_signal = asyncio.Future()
+        await stopping_signal
+    except asyncio.CancelledError:
+        # Handle cancellation (e.g., KeyboardInterrupt)
+        pass
+    finally:
+        # Clean shutdown
+        print("🛑 Stopping bot and scheduler...")
+        await application.updater.stop()
+        await application.stop()
+        await application.shutdown()
+        scheduler.shutdown()
+        print("✅ Bot and scheduler stopped.")
 
 if __name__ == "__main__":
-    main()
+    try:
+        # Run the bot
+        asyncio.run(main())
+    except KeyboardInterrupt:
+        print("Bot stopped by user")
+    except Exception as e:
+        print(f"Error in main: {e}")
 
 # **Summary of Changes and Explanations:**
 
@@ -3051,4 +3145,4 @@ if __name__ == "__main__":
 #     *   Ensured `context=CallbackContext(application=application)` is passed to scheduled job functions where needed.
 #     *   Refined `allowed_updates` in `application.run_polling` for better performance.
 
-# These changes should address the ReplyKeyboardMarkup issue in topics and properly route your scheduled reports to the configured topic threads.
+# These changes should address the ReplyKeyboardMarkup issue in topics and properly route your scheduled reports to the configured topic threads.Хорошо, давайте разберем новую ошибку:
