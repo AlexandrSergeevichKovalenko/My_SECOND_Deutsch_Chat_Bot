@@ -1,3 +1,4 @@
+# Полностью корректный код до Того как я начал делать аналитику (просто сохраняю чтобы был на всякий случай рабочий код)
 import os
 import logging
 import openai
@@ -116,6 +117,7 @@ system_message = {
     Prompt Adherence: Deduct points for missing required structures (e.g., passive voice, Konjunktiv II, double conjunctions) based on severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
     Contextual Consistency: Deduct 5–15 points for translations breaking the narrative flow of the original Russian story.
     B2-Level Appropriateness: Deduct 5–10 points for overly complex/simple vocabulary or grammar not suited for B2 learners.
+
 
     2. **Identify all mistake categories**  
     (you may select multiple categories if needed, but STRICTLY from the enumeration below.  
@@ -643,7 +645,7 @@ def initialise_database():
                         sentence_id INT,
                         correct_translation TEXT NOT NULL,
                         score INT,
-                        attempt INT DEFAULT 1,
+                        attempt INT,
 
                         -- ✅ Уникальный ключ для предотвращения дубликатов
                         CONSTRAINT for_mistakes_table UNIQUE (user_id, sentence, main_category, sub_category)
@@ -1909,15 +1911,13 @@ async def log_translation_mistake(user_id, original_text, user_translation, cate
                     # ✅ Вставляем в таблицу ошибок с использованием общего идентификатора
                     cursor.execute("""
                         INSERT INTO detailed_mistakes_deepseek (
-                            user_id, sentence, added_data, main_category, sub_category, mistake_count, sentence_id, correct_translation, score
-                        ) VALUES (%s, %s, NOW(), %s, %s, 1, %s, %s, %s)
+                            user_id, sentence, added_data, main_category, sub_category, mistake_count, sentence_id, correct_translation
+                        ) VALUES (%s, %s, NOW(), %s, %s, 1, %s, %s)
                         ON CONFLICT (user_id, sentence, main_category, sub_category)
                         DO UPDATE SET
                             mistake_count = detailed_mistakes_deepseek.mistake_count + 1,
-                            attempt = detailed_mistakes_deepseek.attempt + 1,
-                            last_seen = NOW(),
-                            score = EXCLUDED.score;
-                    """, (user_id, original_text, main_category, sub_category, sentence_id, correct_translation, score)
+                            last_seen = NOW();
+                    """, (user_id, original_text, main_category, sub_category, sentence_id, correct_translation)
                     )
                     
                     conn.commit()
@@ -2049,25 +2049,6 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
                     result = cursor.fetchone()
                     if result and result[0] > 0:
-                        logging.info(f"✅ Получаем все данные Предложения FROM detailed_mistakes_deepseek с sentence_id = {id_for_mistake_table}")
-                        cursor.execute("""
-                            SELECT user_id, score, attempt FROM detailed_mistakes_deepseek
-                            WHERE sentence_id = %s;
-                        """, (id_for_mistake_table,))
-                        
-                        rows = cursor.fetchall()
-                        user_id = rows[0][0]
-                        score_to_save = score
-                        total_attempts = sum(row[2] for row in rows)
-                        # Добавляем 1 Чтобы учесть Текущую попытку (без добавления 1 Она не будет учтена)
-                        total_attempts = total_attempts + 1
-                        
-                        logging.info(f"✅ Переносим данные Предложения FROM detailed_mistakes_deepseek в Таблицу successful_translations где находятся предложения с баллом 80 И более с sentence_id = {id_for_mistake_table}")
-                        cursor.execute("""
-                        INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
-                        VALUES (%s,%s,%s,%s, NOW());
-                        """, (user_id, sentence_id, score_to_save, total_attempts))
-
                         logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 85.")
                         # ✅ Удаляем все ошибки, связанные с данным предложением
                         cursor.execute("""
@@ -2082,16 +2063,12 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
                     logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {id_for_mistake_table}: {e}")
 
 
-            # if score == 100:
-            #     print(f"✅ Перевод выполнен идеально ({score}/100) — пропускаем запись в базу данных.")
-            #     continue
+            if score == 100:
+                print(f"✅ Перевод выполнен идеально ({score}/100) — пропускаем запись в базу данных.")
+                continue
         
-            if score >= 80:
-                cursor.execute("""
-                    INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
-                    VALUES(%s, %s, %s, %s, NOW());
-                    """, (user_id, sentence_id, score, int(1)))
-                print(f"✅ Перевод на высоком уровне ({score}/100)")
+            if score > 79:
+                print(f"✅ Перевод на высоком уровне ({score}/100) — считаем это стилистической ошибкой.")
                 continue
             
             # ✅ Если оценка < 80 → только тогда сохраняем в базу
