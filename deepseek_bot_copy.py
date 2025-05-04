@@ -826,8 +826,8 @@ async def send_morning_reminder(context:CallbackContext):
         "📌 Важно:\n"
         "🔹 Переводите максимально точно и быстро.\n\n"
         "🔹 После перевода всех предложений выполните 📜 Проверить перевод и подтвердите нажатием ✅ Завершить перевод.\n\n"
-        "🔹 В 09:00, 12:00 и 15:00 - промежуточные итоги по каждому участнику.\n\n"
-        "🔹 Итоговые результаты получим в 23:30.\n\n"
+        "🔹 В 09:05, 14:05 и 18:05 - промежуточные итоги по каждому участнику.\n\n"
+        "🔹 Итоговые результаты получим в 22:52.\n\n"
         "🔹 Узнать свою статистику - жми 🟡 Посмотреть свою статистику.\n"
     )
 
@@ -1765,7 +1765,7 @@ async def check_translation_with_claude(original_text, user_translation, update,
         return "❌ Ошибка: Не удалось обработать ответ от Claude."
     
     # Собираем результат в список
-    result_list = ["📥 *Explanation with Claude*:\n", f"🟢*Original russian sentence*:\n{original_text}\n", f"🟣*User translation*:\n{user_translation}\n"]
+    result_list = ["📥 *Detailed grammar explanation*:\n", f"🟢*Original russian sentence*:\n{original_text}\n", f"🟣*User translation*:\n{user_translation}\n"]
 
     # Добавляем ошибки
     for line in list_of_errors_pattern:
@@ -3172,7 +3172,7 @@ def main():
 
     # ✅ Добавляем задачу в `scheduler` ДЛЯ УТРА
     print("📌 Добавляем задачу в scheduler...")
-    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=6, minute=30)
+    scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=5, minute=5)
     scheduler.add_job(lambda: run_async_job(send_morning_reminder,CallbackContext(application=application)),"cron", hour=15, minute=30)
 
     scheduler.add_job(
@@ -3185,7 +3185,7 @@ def main():
     )
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=15, minute=15)
-    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="mon", hour=5, minute=5) 
+    scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="mon", hour=6, minute=5) 
     #scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="sun", hour=7, minute=7)
     
     scheduler.add_job(lambda: run_async_job(force_finalize_sessions, CallbackContext(application=application)), "cron", hour=21, minute=59)
@@ -3196,7 +3196,7 @@ def main():
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
-    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=16, minute=55)
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=5, minute=15)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
