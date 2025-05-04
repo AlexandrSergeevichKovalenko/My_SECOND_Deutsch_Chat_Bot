@@ -2038,55 +2038,59 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             conn.commit()
 
-            #deleting sentences from detailed_mistakes_deepseek if score is 85 or more
-            if score >= 85 and id_for_mistake_table:
+            # Проверяем: реально ли это предложение есть в базе ошибок?
+            cursor.execute("""
+                SELECT COUNT(*) FROM detailed_mistakes_deepseek
+                WHERE sentence_id = %s AND user_id = %s;
+            """, (id_for_mistake_table, user_id))
+
+            was_in_mistakes = cursor.fetchone()[0] > 0
+
+            if score >= 85 and was_in_mistakes:
                 try:
-                    # ✅ Проверяем, существует ли предложение с таким sentence_id
+                    # # ✅ Проверяем, существует ли предложение с таким sentence_id
+                    # cursor.execute("""
+                    #     SELECT COUNT(*) FROM detailed_mistakes_deepseek
+                    #     WHERE sentence_id = %s;
+                    # """, (id_for_mistake_table, ))
+
+                    # result = cursor.fetchone()
+                    # if result and result[0] > 0:
+                    logging.info(f"✅ Получаем все данные Предложения FROM detailed_mistakes_deepseek с sentence_id = {id_for_mistake_table}")
                     cursor.execute("""
-                        SELECT COUNT(*) FROM detailed_mistakes_deepseek
+                        SELECT user_id, score, attempt FROM detailed_mistakes_deepseek
                         WHERE sentence_id = %s;
-                    """, (id_for_mistake_table, ))
-
-                    result = cursor.fetchone()
-                    if result and result[0] > 0:
-                        logging.info(f"✅ Получаем все данные Предложения FROM detailed_mistakes_deepseek с sentence_id = {id_for_mistake_table}")
-                        cursor.execute("""
-                            SELECT user_id, score, attempt FROM detailed_mistakes_deepseek
-                            WHERE sentence_id = %s;
-                        """, (id_for_mistake_table,))
+                    """, (id_for_mistake_table,))
                         
-                        rows = cursor.fetchall()
-                        user_id = rows[0][0]
-                        score_to_save = score
-                        total_attempts = sum(row[2] for row in rows)
-                        # Добавляем 1 Чтобы учесть Текущую попытку (без добавления 1 Она не будет учтена)
-                        total_attempts = total_attempts + 1
-                        
-                        logging.info(f"✅ Переносим данные Предложения FROM detailed_mistakes_deepseek в Таблицу successful_translations где находятся предложения с баллом 80 И более с sentence_id = {id_for_mistake_table}")
-                        cursor.execute("""
-                        INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
-                        VALUES (%s,%s,%s,%s, NOW());
-                        """, (user_id, sentence_id, score_to_save, total_attempts))
+                    rows = cursor.fetchall()
+                    user_id = rows[0][0]
+                    score_to_save = score
+                    total_attempts = max(row[2] for row in rows)
+                    # Добавляем 1 Чтобы учесть Текущую попытку (без добавления 1 Она не будет учтена)
+                    total_attempts = total_attempts + 1
+                    
+                    logging.info(f"✅ Переносим данные Предложения FROM detailed_mistakes_deepseek в Таблицу successful_translations где находятся предложения с баллом 80 И более с sentence_id = {id_for_mistake_table}")
+                    cursor.execute("""
+                    INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
+                    VALUES (%s,%s,%s,%s, NOW());
+                    """, (user_id, sentence_id, score_to_save, total_attempts))
 
-                        logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 85.")
-                        # ✅ Удаляем все ошибки, связанные с данным предложением
-                        cursor.execute("""
-                            DELETE FROM detailed_mistakes_deepseek
-                            WHERE sentence_id = %s;
-                            """, (id_for_mistake_table, ))
-                        conn.commit()
-                        logging.info(f"✅ Предложение с sentence_id = {id_for_mistake_table} успешно удалено.")
-                    else:
-                        logging.warning(f"⚠️ Предложение с sentence_id = {id_for_mistake_table} не найдено в базе.")
+                    logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 85.")
+                    
+                    # ✅ Удаляем все ошибки, связанные с данным предложением
+                    cursor.execute("""
+                        DELETE FROM detailed_mistakes_deepseek
+                        WHERE sentence_id = %s;
+                        """, (id_for_mistake_table, ))
+                    conn.commit()
+                    logging.info(f"✅ Предложение с sentence_id = {id_for_mistake_table} успешно удалено.")
+
                 except Exception as e:
                     logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {id_for_mistake_table}: {e}")
 
+            mistake_exists = was_in_mistakes
 
-            # if score == 100:
-            #     print(f"✅ Перевод выполнен идеально ({score}/100) — пропускаем запись в базу данных.")
-            #     continue
-        
-            if score >= 80:
+            if score >= 80 and not mistake_exists:
                 cursor.execute("""
                     INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
                     VALUES(%s, %s, %s, %s, NOW());
