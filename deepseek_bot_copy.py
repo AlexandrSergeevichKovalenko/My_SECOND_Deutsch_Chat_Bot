@@ -670,7 +670,10 @@ async def log_all_messages(update: Update, context: CallbackContext):
 
 # Функция для добавления в словарь всех id Сообщений которые потом я буду удалять, Это служебные сообщения вспомогательные
 def add_service_msg_id(context, message_id):
-    context.user_data.setdefault("service_message_ids", []).append(message_id)
+    if "service_message_ids" not in context.user_data:
+        logging.info(f"📝 Создаём service_message_ids для user_id={context._user_id}")
+        context.user_data.setdefault("service_message_ids", []).append(message_id)
+        logging.debug(f"Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
     print(f"DEBUG: Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
 
 
@@ -718,10 +721,6 @@ async def handle_button_click(update: Update, context: CallbackContext):
     text = update.message.text.strip()
     print(f"📥 Получено сообщение: {text}")
     
-    # Не будем удалять Сообщения "✅ Завершить перевод" Чтобы пользователь видел что перевод завершен
-    
-    add_service_msg_id(context, update.message.message_id)
-
     if text == "📌 Выбрать тему":
         await choose_topic(update, context)
     elif text == "🚀 Начать перевод":
@@ -734,7 +733,6 @@ async def handle_button_click(update: Update, context: CallbackContext):
         logging.info(f"📌 Пользователь {update.message.from_user.id} нажал кнопку '📜 Проверить перевод'. Запускаем проверку.")
         await check_translation_from_text(update, context)  # ✅ Теперь сразу запускаем проверку переводов
 
-    
 
 # 🔹 **Функция, которая запускает проверку переводов**
 async def check_translation_from_text(update: Update, context: CallbackContext):
@@ -997,7 +995,7 @@ async def letsgo(update: Update, context: CallbackContext):
         #"После того как вы отправите все переводы, нажмите **'📜 Проверить перевод'**, чтобы проверить их.\n"
         #"Когда все переводы будут проверены, нажмите **'✅ Завершить перевод'**, чтобы зафиксировать время!"
     )
-    add_service_msg_id(context, msg_4.message_id)
+    #add_service_msg_id(context, msg_4.message_id)
 
 
 
@@ -1057,9 +1055,7 @@ async def delete_message_with_retry(bot, chat_id, message_id, retries=3, delay=2
 async def done(update: Update, context: CallbackContext):
     user = update.message.from_user
     user_id = user.id
-
-    message_ids = context.user_data.get("service_message_ids", []).copy()  # Создаём копию списка
-    print(f"DEBUG: message_ids перед удалением: {message_ids}")    
+    
 
     # # ✅ Даём 5 секунд на завершение записи переводов в базу данных
     # logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
@@ -1137,10 +1133,14 @@ async def done(update: Update, context: CallbackContext):
         )
         
     else:
-        msg_2 = await update.message.reply_text("✅ **Вы успешно завершили перевод! Все предложения этой сессии переведены.**")
+        msg_2 = await update.message.reply_text("✅ Вы успешно завершили перевод! Все предложения этой сессии переведены.")
     
-    add_service_msg_id(context, msg_2.message_id)
-    await asyncio.sleep(15)
+    #add_service_msg_id(context, msg_2.message_id)
+    
+    message_ids = context.user_data.get("service_message_ids", []).copy()  # Создаём копию списка
+    print(f"DEBUG: message_ids перед удалением: {message_ids}")
+
+    await asyncio.sleep(300)
 
     print(f"DEBUG: Удаляем сообщения: {message_ids}")
     for message_id in message_ids:
@@ -1389,6 +1389,7 @@ async def check_translation(original_text, user_translation, update: Update, con
 
     for attempt in range(3):
         try:
+            logging.info(f" GPT started working on {original_text} sentence. Passing data to GPT model")
             start_time = asyncio.get_running_loop().time()
             
             client.beta.threads.messages.create(
@@ -1405,13 +1406,14 @@ async def check_translation(original_text, user_translation, update: Update, con
                 run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
                 if run_status.status == "completed":
                     break
-                await asyncio.sleep(1)  # подожди чуть-чуть
+                await asyncio.sleep(2)  # подожди чуть-чуть
 
 
             # Получаем сообщения после завершения run
             messages = client.beta.threads.messages.list(thread_id=thread_id)
             last_message = messages.data[0]  # обычно последнее — ответ
             collected_text = last_message.content[0].text.value
+            logging.info(f"We got a reply from GPT model for sentence {original_text}")
             
             try:
                 client.beta.threads.delete(thread_id=thread_id)
@@ -2589,8 +2591,8 @@ async def force_finalize_sessions(context: CallbackContext = None):
     cursor.close()
     conn.close()
 
-    msg = await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="🔔 **Все незавершённые сессии за сегодня автоматически закрыты!**")
-    add_service_msg_id(context, msg.message_id)
+    msg = await context.bot.send_message(chat_id=TEST_DEEPSEEK_BOT_GROUP_CHAT_ID, text="🔔 Все незавершённые сессии за сегодня автоматически закрыты!")
+    #add_service_msg_id(context, msg.message_id)
 
 
 

@@ -84,7 +84,6 @@ async def load_data_for_analytics(user_id: int, period: str = 'week') -> pd.Data
             df_mistakes['last_seen'] = pd.to_datetime(df_mistakes['last_seen'])
             df_sentences['date'] = pd.to_datetime(df_sentences['date'])
 
-            
 
     return {
         "progress": df_progress,
@@ -98,4 +97,5 @@ async def load_data_for_analytics(user_id: int, period: str = 'week') -> pd.Data
 if __name__ == "__main__":
     dfs = asyncio.run(load_data_for_analytics(117649764))
     dfs["translations"].head()
+    #print(dfs)
 
