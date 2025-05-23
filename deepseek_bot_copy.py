@@ -148,8 +148,8 @@ system_message = {
 "generate_sentences":"""
 You are an expert Russian language tutor and creative writer specializing in crafting coherent, engaging stories for language learners at the B2 level. 
 Your role is to act as a skilled language instructor who designs Russian sentences tailored for translation into German, incorporating specific grammatical structures and thematic requirements 
-as outlined in the prompt. You are meticulous, ensuring each sentence aligns with the requested in request linguistic features while maintaining natural, everyday vocabulary and logical narrative flow. 
-Your goal is to produce clear, contextually connected sentences that serve as effective learning material, 
+as outlined in the prompt. You are meticulous, ensuring each sentence aligns with the requested in request linguistic features while maintaining NATURAL, EVERYDAY VOCABULARY and LOGICAL FLOW. 
+Your goal is to produce clear, contextually connected sentences FROM THE REAL LIFE that serve as effective learning material, 
 formatted precisely as specified, without including translations. 
 You are a reliable guide, prioritizing accuracy, creativity, and adherence to the user’s detailed instructions.
 
@@ -193,7 +193,7 @@ You are an expert in Russian and German languages, a professional translator, an
 
 Your task is to analyze the student's translation from Russian to German and provide detailed feedback according to the following criteria:
 
-❗️ Important: Do NOT repeat the original sentence or the translation in your response. Only provide conclusions and explanations.
+❗️ Important: Do NOT repeat the original sentence or the translation in your response. Only provide conclusions and explanations. LANGUAGE OF CAPTIONS: ENGLISH. LANGUAGE OF EXPLANATIONS: GERMAN.
 
 Analysis Criteria:
 1. Error Identification:
@@ -670,11 +670,13 @@ async def log_all_messages(update: Update, context: CallbackContext):
 
 # Функция для добавления в словарь всех id Сообщений которые потом я буду удалять, Это служебные сообщения вспомогательные
 def add_service_msg_id(context, message_id):
+    context_id = id(context)
+    logging.info(f"DEBUG: context_id={context_id} в add_service_msg_id, добавляем message_id={message_id}")
     if "service_message_ids" not in context.user_data:
         logging.info(f"📝 Создаём service_message_ids для user_id={context._user_id}")
-        context.user_data.setdefault("service_message_ids", []).append(message_id)
-        logging.debug(f"Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
-    print(f"DEBUG: Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
+        context.user_data["service_message_ids"] = []
+    context.user_data["service_message_ids"].append(message_id)
+    logging.info(f"DEBUG: Добавлен message_id: {message_id}, текущий список: {context.user_data['service_message_ids']}")
 
 
 #Имитация набора текста с typing-индикатором
@@ -720,6 +722,10 @@ async def handle_button_click(update: Update, context: CallbackContext):
     
     text = update.message.text.strip()
     print(f"📥 Получено сообщение: {text}")
+
+    # Добавляем message_id пользовательского сообщения в список сервисных сообщений
+    add_service_msg_id(context, update.message.message_id)
+    logging.info(f"📩 Добавлен message_id пользовательского сообщения: {update.message.message_id}")
     
     if text == "📌 Выбрать тему":
         await choose_topic(update, context)
@@ -742,6 +748,7 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
     if "pending_translations" not in context.user_data or not context.user_data["pending_translations"]:
         logging.info(f"❌ Пользователь {user_id} нажал '📜 Проверить перевод', но у него нет сохранённых переводов!")
         msg_1 = await update.message.reply_text("❌ У вас нет непроверенных переводов! Сначала отправьте перевод, затем нажмите '📜 Проверить перевод'.")
+        logging.info(f"📩 Отправлено сообщение об отсутствии переводов с ID={msg_1.message_id}")
         add_service_msg_id(context, msg_1.message_id)
         return
 
@@ -757,6 +764,7 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
     # Если нет отформатированных переводов, выдаём ошибку
     if not formatted_translations:
         msg_2 = await update.message.reply_text("❌ Ошибка: Нет переводов для проверки!")
+        logging.info(f"📩 Отправлено сообщение об отсутствии переводов for translation с ID={msg_2.message_id}")
         add_service_msg_id(context, msg_2.message_id)
         return
 
@@ -764,7 +772,7 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
     translation_text = "/translate\n" + "\n".join(formatted_translations)
 
     # ✅ Очищаем список ожидающих переводов (чтобы повторно не сохранялись)
-    context.user_data["pending_translations"] = []
+    #context.user_data["pending_translations"] = []
 
     # ✅ Логируем перед передачей в `check_user_translation()`
     logging.info(f"📜 Передаём в check_user_translation():\n{translation_text}")
@@ -776,7 +784,7 @@ async def check_translation_from_text(update: Update, context: CallbackContext):
 
 async def start(update: Update, context: CallbackContext):
     """Запуск бота и отправка главного меню."""
-    #await update.message.reply_text("Привет! Это бот для перевода.")
+    context.user_data.setdefault("service_message_ids", [])  # Инициализируем список
     await send_main_menu(update, context)
 
 async def log_message(update: Update, context: CallbackContext):
@@ -850,6 +858,8 @@ async def letsgo(update: Update, context: CallbackContext):
     chat_id = update.message.chat_id  # ✅ Исправленный атрибут
     username = user.username or user.first_name
 
+    context.user_data.setdefault("service_message_ids", [])
+
      # ✅ Если словаря `start_times` нет — создаём его (это может быть в начале запуска бота, Когда ещё нет словаря)
     if "start_times" not in context.user_data:
         context.user_data["start_times"] = {}
@@ -870,6 +880,7 @@ async def letsgo(update: Update, context: CallbackContext):
         msg_1 = await update.message.reply_text(
             "❌ Вы не выбрали тему! Сначала выберите тему используя кнопку '📌 Выбрать тему'"
         )
+        logging.info(f"📩 Отправлено сообщение об ошибке темы с ID={msg_1.message_id}")
         add_service_msg_id(context, msg_1.message_id)
         return  # ⛔ Прерываем выполнение функции, если тема не выбрана
 
@@ -887,6 +898,7 @@ async def letsgo(update: Update, context: CallbackContext):
         logging.info(f"⏳ Пользователь {username} ({user_id}) уже начал перевод сегодня.")
         #await update.message.reply_animation("https://media.giphy.com/media/3o7aD2saalBwwftBIY/giphy.gif")
         msg_2 = await update.message.reply_text("❌ Вы уже начали перевод! Завершите его перед повторным запуском нажав на кнопку '✅ Завершить перевод'")
+        logging.info(f"📩 Отправлено сообщение об активной сессии с ID={msg_2.message_id}")
         add_service_msg_id(context, msg_2.message_id)
         cursor.close()
         conn.close()
@@ -915,7 +927,9 @@ async def letsgo(update: Update, context: CallbackContext):
     sentences = [s.strip() for s in await get_original_sentences(user_id, context) if s.strip()]
 
     if not sentences:
-        await update.message.reply_text("❌ Ошибка: не удалось получить предложения. Попробуйте позже.")
+        msg_3 = await update.message.reply_text("❌ Ошибка: не удалось получить предложения. Попробуйте позже.")
+        logging.info(f"📩 Отправлено сообщение: ❌ Ошибка: не удалось получить предложения. Попробуйте позже с ID={msg_3.message_id}")
+        add_service_msg_id(context, msg_3.message_id)       
         cursor.close()
         conn.close()
         return
@@ -987,15 +1001,17 @@ async def letsgo(update: Update, context: CallbackContext):
     "✏️ Отправьте ваши переводы в формате:\n1. Mein Name ist Konchita.\n\n"
     )
 
-    msg_3 = await context.bot.send_message(chat_id=update.message.chat_id, text=text)
-    add_service_msg_id(context, msg_3.message_id)
+    msg_4 = await context.bot.send_message(chat_id=update.message.chat_id, text=text)
+    logging.info(f"📩 Отправлено сообщение о начале перевода с ID={msg_4.message_id}")
+    add_service_msg_id(context, msg_4.message_id)
 
-    msg_4 = await update.message.reply_text(
+    msg_5 = await update.message.reply_text(
         f"{user.first_name}, Ваши предложения:\n{task_text}\n\n"
         #"После того как вы отправите все переводы, нажмите **'📜 Проверить перевод'**, чтобы проверить их.\n"
         #"Когда все переводы будут проверены, нажмите **'✅ Завершить перевод'**, чтобы зафиксировать время!"
     )
-    #add_service_msg_id(context, msg_4.message_id)
+    logging.info(f"📩 Отправлено сообщение с предложениями с ID={msg_5.message_id}")
+    add_service_msg_id(context, msg_5.message_id)
 
 
 
@@ -1055,11 +1071,9 @@ async def delete_message_with_retry(bot, chat_id, message_id, retries=3, delay=2
 async def done(update: Update, context: CallbackContext):
     user = update.message.from_user
     user_id = user.id
-    
+    context_id = id(context)
+    logging.info(f"DEBUG: context_id={context_id} в done")
 
-    # # ✅ Даём 5 секунд на завершение записи переводов в базу данных
-    # logging.info(f"⌛ Ждём 120 секунд перед завершением сессии для пользователя {user_id}...")
-    # await asyncio.sleep(120)
 
     conn = get_db_connection()
     cursor = conn.cursor()
@@ -1076,6 +1090,7 @@ async def done(update: Update, context: CallbackContext):
 
     if not session:
         msg_1 = await update.message.reply_text("❌ У вас нет активных сессий! Используйте кнопки: '📌 Выбрать тему' -> '🚀 Начать перевод' чтобы начать.")
+        logging.info(f"📩 Отправлено сообщение об отсутствии сессии с ID={msg_1.message_id}")
         add_service_msg_id(context, msg_1.message_id)
         cursor.close()
         conn.close()
@@ -1084,69 +1099,109 @@ async def done(update: Update, context: CallbackContext):
 
     # 📊 Получаем общее количество предложений
     cursor.execute("""
-        SELECT COUNT(*) FROM daily_sentences_deepseek 
+        SELECT COUNT(*) 
+        FROM daily_sentences_deepseek 
         WHERE user_id = %s AND session_id = %s;
         """, (user_id, session_id))
     
     total_sentences = cursor.fetchone()[0]
     logging.info(f"🔄 Ожидаем записи всех переводов пользователя {user_id}. Всего предложений: {total_sentences}")
 
-    # ⏳ Ждём до 150 секунд, пока все переводы не будут записаны
-    max_retries = 150
-    for i in range(0, max_retries, 5):
+    # Получаем количество отправленных переводов (из pending_translations)
+    pending_translations_count = len(context.user_data.get("pending_translations", []))
+    logging.info(f"📤 Пользователь отправил переводов: {pending_translations_count}")
+
+    # Даем время для завершения асинхронных задач (например, записи переводов из check_translation_from_text)
+    logging.info("⏳ Даем время для завершения записи переводов в базу...")
+    await asyncio.sleep(5)  # Задержка 5 секунд перед первой проверкой
+
+    # Получаем количество записанных переводов в базе
+    cursor.execute("""
+        SELECT COUNT(*) 
+        FROM translations_deepseek 
+        WHERE user_id = %s AND session_id = %s;
+        """, (user_id, session_id))
+    translated_count = cursor.fetchone()[0]
+    logging.info(f"📬 Уже записано переводов: {translated_count}/{pending_translations_count}")
+
+
+    # Проверяем, если отправленных переводов больше, чем предложений в сессии
+    if pending_translations_count > total_sentences:
+        logging.warning(f"⚠️ pending_translations_count ({pending_translations_count}) больше total_sentences ({total_sentences})")
+        pending_translations_count = min(pending_translations_count, total_sentences)
+
+    #await asyncio.sleep(10)
+
+
+    # Ожидаем, пока все отправленные переводы не запишутся в базу
+    max_attempts = 30  # Максимум 30 попыток (30 * 5 секунд = 150 секунд)
+    attempt = 0
+    start_time = datetime.now()
+
+    logging.info(f"🚩 START while-loop: translated_count={translated_count}, pending_translations_count={pending_translations_count}")
+
+    while translated_count < pending_translations_count and attempt < max_attempts:
         cursor.execute("""
-            SELECT COUNT(*) FROM translations_deepseek
-            WHERE user_id = %s AND session_id = %s; 
+            SELECT COUNT(*) 
+            FROM translations_deepseek 
+            WHERE user_id = %s AND session_id = %s;
             """, (user_id, session_id))
         translated_count = cursor.fetchone()[0]
+        elapsed_time = (datetime.now() - start_time).total_seconds()
+        logging.info(f"⌛ Проверяем запись переводов: {translated_count}/{pending_translations_count}. Прошло {elapsed_time:.1f} сек, попытка {attempt + 1}")
 
-        if translated_count >= total_sentences:
-            logging.info(f"✅ Все переводы записаны: {translated_count}/{total_sentences}")
+        if translated_count >= pending_translations_count:
+            logging.info(f"✅ Все отправленные переводы записаны: {translated_count}/{pending_translations_count}")
             break
 
-        logging.info(f"⌛ Переведено {translated_count}/{total_sentences}. Ожидание... {i+1} сек.")
-        await asyncio.sleep(5)
+        await asyncio.sleep(5)  # Ждем 5 секунд
+        attempt += 1
+
+    # Логируем, если не все переводы записаны
+    if translated_count < pending_translations_count and attempt >= max_attempts:
+        logging.warning(f"⚠️ Не все переводы записаны после {max_attempts} попыток: {translated_count}/{pending_translations_count}")
 
 
-    # ✅ Позволяем пользователю всегда завершать сессию вручную
+    # Завершаем сессию
     cursor.execute("""
         UPDATE user_progress_deepseek
         SET end_time = NOW(), completed = TRUE
-        WHERE user_id = %s AND completed = FALSE;""",
-        (user_id, ))
+        WHERE user_id = %s AND session_id = %s AND completed = FALSE;
+        """, (user_id, session_id))
     conn.commit()
 
+    # Сбрасываем pending_translations
+    context.user_data["pending_translations"] = []
+    logging.info(f"DEBUG: Сброшены pending_translations для user_id={user_id}")
 
-    cursor.execute("""
-        SELECT COUNT(*) FROM translations_deepseek
-        WHERE user_id = %s AND session_id = %s;
-        """,(user_id, session_id))
-    final_translated_count = cursor.fetchone()[0]
-    
-    # получаем все id Служебных сообщений которые мы собирали в словарь под ключом service_message_ids для их удаления
-    print(f"DEBUG: message_ids перед удалением: {message_ids}")
-
-    if final_translated_count < total_sentences:
-        msg_2 = await update.message.reply_text(
-            f"⚠️ Вы перевели {final_translated_count} из {total_sentences} предложений.\n"
-            "Перевод завершён, но не все предложения переведены! Это повлияет на ваш итоговый балл."           
+    # Отправляем итоговое сообщение пользователю
+    if translated_count == 0:
+        completion_msg = await update.message.reply_text(
+            f"😔 Вы не перевели ни одного предложения из {total_sentences} в этой сессии.\n"
+            f"Попробуйте начать новую сессию с помощью кнопок '📌 Выбрать тему' -> '🚀 Начать перевод'.",
+            parse_mode="Markdown"
         )
-        
+    elif translated_count < total_sentences:
+        completion_msg = await update.message.reply_text(
+            f"⚠️ *Вы перевели {translated_count} из {total_sentences} предложений!*\n"
+            f"Перевод завершён, но не все предложения переведены. Это повлияет на ваш итоговый балл.",
+            parse_mode="Markdown"
+        )
     else:
-        msg_2 = await update.message.reply_text("✅ Вы успешно завершили перевод! Все предложения этой сессии переведены.")
+        completion_msg = await update.message.reply_text(
+            f"🎉 *Вы успешно завершили перевод!*\n"
+            f"Все {total_sentences} предложений этой сессии переведены! 🚀",
+            parse_mode="Markdown"
+        )
     
-    #add_service_msg_id(context, msg_2.message_id)
+    message_ids = context.user_data.get("service_message_ids", [])
     
-    message_ids = context.user_data.get("service_message_ids", []).copy()  # Создаём копию списка
-    print(f"DEBUG: message_ids перед удалением: {message_ids}")
-
-    await asyncio.sleep(300)
-
-    print(f"DEBUG: Удаляем сообщения: {message_ids}")
+    # Deletion messages from the chat
     for message_id in message_ids:
         await delete_message_with_retry(context.bot, update.effective_chat.id, message_id)
 
-    print(f"DEBUG: Сбрасываем service_message_ids. Текущий список: {context.user_data['service_message_ids']}")
+    # Сбрасываем список
+    logging.info(f"DEBUG: Сбрасываем service_message_ids. Было: {context.user_data['service_message_ids']}")
     context.user_data["service_message_ids"] = []
 
     cursor.close()
@@ -1941,7 +1996,7 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
     
     if "pending_translations" in context.user_data and context.user_data["pending_translations"]:
         translation_text = "\n".join(context.user_data["pending_translations"])
-        context.user_data["pending_translations"] = []
+        #context.user_data["pending_translations"] = []
     
     # Убираем команду "/translate", оставляя только переводы
     # message_text = update.message.text.strip()
