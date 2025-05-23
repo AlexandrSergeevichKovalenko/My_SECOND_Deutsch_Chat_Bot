@@ -1097,6 +1097,8 @@ async def done(update: Update, context: CallbackContext):
         return
     session_id = session[0]   # ID текущей сессии
 
+    message_ids = context.user_data.get("service_message_ids", [])
+
     # 📊 Получаем общее количество предложений
     cursor.execute("""
         SELECT COUNT(*) 
@@ -1194,19 +1196,21 @@ async def done(update: Update, context: CallbackContext):
             parse_mode="Markdown"
         )
     
-    message_ids = context.user_data.get("service_message_ids", [])
-    
+
     # Deletion messages from the chat
     for message_id in message_ids:
-        await delete_message_with_retry(context.bot, update.effective_chat.id, message_id)
-
+        try:
+            await delete_message_with_retry(context.bot, update.effective_chat.id, message_id)
+        except TelegramError as e:
+            logging.warning(f"⚠️ Не удалось удалить сервисное сообщение {message_id}: {e}")
+    
     # Сбрасываем список
-    logging.info(f"DEBUG: Сбрасываем service_message_ids. Было: {context.user_data['service_message_ids']}")
+    logging.debug(f"DEBUG: Сбрасываем service_message_ids. Было: {context.user_data.get('service_message_ids', '[] (ключ отсутствовал или пуст)')}")
     context.user_data["service_message_ids"] = []
 
     cursor.close()
     conn.close()
-
+    
 
 def correct_numbering(sentences):
     """!?! Но это выражение требует фиксированный длины шаблона внутри скобок(?<=^\d+\.), Поэтому не подходит.Исправляет нумерацию, удаляя только вторую некорректную цифру.
