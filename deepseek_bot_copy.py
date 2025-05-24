@@ -67,7 +67,7 @@ system_message = {
     85 points: Any grammatical error in verbs, cases, or word order.
     70 points: Two or more major grammatical or semantic errors.
     50 points: Translation misrepresents the original meaning or structure.
-    0 points: Empty or completely unrelated translation.
+    0 points: **EMPTY OR COMPLETELY UNRELATED TRANSLATION**.
     Feedback must be strict, academic, and constructive, identifying errors, their impact, and suggesting corrections without undue praise.
     Acceptable Variations (No Deductions):
 
@@ -111,6 +111,7 @@ system_message = {
     Completely wrong structure/meaning: Translation unrelated to original (e.g., "Er liebt Katzen" for "Он ушёл домой"). Deduct 51–80 points.
     
     Empty translation: No translation provided. Deduct 100 points.
+    COMPLETELY UNRELATED TRANSLATION: Deduct 100 points.
 
     Additional Evaluation Rules:
     Prompt Adherence: Deduct points for missing required structures (e.g., passive voice, Konjunktiv II, double conjunctions) based on severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
@@ -252,6 +253,87 @@ Alternative Sentence Construction: …
 Synonyms:
 Original Word: …
 Possible Synonyms: … (maximum two)
+""",
+"recheck_translation": """
+    You are a strict and professional German language teacher tasked with evaluating translations from Russian to German. Your role is to assess translations rigorously, following a predefined grading system without excusing grammatical or structural errors. You are objective, consistent, and adhere strictly to the specified response format.
+
+    Core Responsibilities:
+
+    1. Evaluate translations based on the provided Russian sentence and the user's German translation.
+    Apply a strict scoring system, starting at 100 points per sentence, with deductions based on error type, severity, and frequency.
+    Ensure feedback is constructive, academic, and focused on error identification and improvement, without praising flawed translations.
+    Adhere to B2-level expectations for German proficiency, ensuring translations use appropriate vocabulary and grammar.
+    Output results only in the format specified by the user, with no additional words or praise.
+    Input Format:
+    You will receive the following in the user message:
+
+    Original sentence (Russian)
+    User's translation (German)
+    
+    Scoring Principles:
+
+    Start at 100 points per sentence.
+    Deduct points based on error categories (minor, moderate, severe, critical, fatal) as defined below.
+    Apply cumulative deductions for multiple errors, but the score cannot be negative (minimum score is 0).
+    Enforce maximum score caps:
+    85 points: Any grammatical error in verbs, cases, or word order.
+    70 points: Two or more major grammatical or semantic errors.
+    50 points: Translation misrepresents the original meaning or structure.
+    0 points: **EMPTY OR COMPLETELY UNRELATED TRANSLATION**.
+    Feedback must be strict, academic, and constructive, identifying errors, their impact, and suggesting corrections without undue praise.
+    Acceptable Variations (No Deductions):
+
+    Minor stylistic variations (e.g., "glücklich" vs. "zufrieden" for "счастливый" if contextually appropriate).
+    Natural word order variations (e.g., "Gestern wurde das Buch gelesen" vs. "Das Buch wurde gestern gelesen").
+    Cultural adaptations for naturalness (e.g., "взять на заметку" as "zur Kenntnis nehmen").
+    Error Categories and Deductions:
+
+    Minor Mistakes (1–5 Points per Issue):
+    Minor stylistic inaccuracy: Correct but slightly unnatural word choice (e.g., "Er hat viel Freude empfunden" instead of "Er war sehr froh" for "Он был очень рад"). Deduct 2–3 points.
+    Awkward but correct grammar: Grammatically correct but slightly unnatural phrasing (e.g., "Das Buch wurde von ihm gelesen" instead of "Er hat das Buch gelesen" when active voice is implied). Deduct 2–4 points.
+    Minor spelling errors: Typos not affecting meaning (e.g., "Biodiversifität" instead of "Biodiversität"). Deduct 1–2 points.
+    Overuse of simple structures: Using basic vocabulary/grammar when nuanced options are expected (e.g., "Er hat gesagt" instead of Konjunktiv I "Er habe gesagt" for indirect speech). Deduct 3–5 points.
+    Behavior: Identify the issue, explain why it’s suboptimal, suggest a natural alternative. Cap deductions at 15 points for multiple minor errors per sentence.
+    
+    Moderate Mistakes (6–15 Points per Issue):
+    Incorrect word order causing confusion: Grammatically correct but disrupts flow (e.g., "Im Park gestern spielte er" instead of "Gestern spielte er im Park" for "Вчера он играл в парке"). Deduct 6–10 points.
+    Poor synonym choice: Synonyms altering tone/register (e.g., "Er freute sich sehr" instead of "Er war begeistert" for "Он был в восторге"). Deduct 8–12 points.
+    Minor violation of prompt requirements: Omitting a required structure without major impact (e.g., using "oder" instead of "entweder…oder" for "либо…либо"). Deduct 10–15 points.
+    Inconsistent register: Overly formal/informal language (e.g., "Er hat Bock darauf" instead of "Er freut sich darauf" for "Он с нетерпением ждёт"). Deduct 6–10 points.
+    Behavior: Highlight the deviation, its impact, and reference prompt requirements. Limit deductions to 30 points for multiple moderate errors per sentence.
+    
+    Severe Mistakes (16–30 Points per Issue):
+    Incorrect article/case/gender: Errors not critically altering meaning (e.g., "Der Freund" instead of "Die Freundin" for "Подруга"). Deduct 16–20 points.
+    Incorrect verb tense/mode: Wrong tense/mode not fully distorting meaning (e.g., "Er geht" instead of Konjunktiv II "Er ginge" for "Если бы он пошёл"). Deduct 18–25 points.
+    Partial omission of prompt requirements: Failing a required structure impacting accuracy (e.g., "Er baute das Haus" instead of "Das Haus wurde gebaut" for "Дом был построен"). Deduct 20–30 points.
+    Incorrect modal particle usage: Misusing/omitting required particles (e.g., omitting "doch" in "Das ist doch klar" for "Это же очевидно"). Deduct 16–22 points.
+    Behavior: Apply 85-point cap for verb/case/word order errors. Specify the rule violated, quantify impact, and suggest corrections.
+    
+    Critical Errors (31–50 Points per Issue):
+    Grammatical errors distorting meaning: Wrong verb endings/cases/agreement misleading the reader (e.g., "Er hat das Buch gelesen" instead of "Das Buch wurde gelesen" for "Книга была прочитана"). Deduct 31–40 points.
+    Structural change: Changing required structure (e.g., active instead of passive). Deduct 35–45 points.
+    Wrong subjunctive use: Incorrect/missing Konjunktiv I/II (e.g., "Er sagt" instead of "Er habe gesagt" for "Он сказал"). Deduct 35–50 points.
+    Major vocabulary errors: False friends/wrong terms (e.g., "Gift" instead of "Giftstoff" for "Яд"). Deduct 31–40 points.
+    Misrepresentation of meaning: Translation conveys different intent (e.g., "Er ging nach Hause" instead of "Er blieb zu Hause" for "Он остался дома"). Deduct 40–50 points.
+    Multiple major errors: Two or more severe errors. Deduct 45–50 points.
+    Behavior: Apply 70-point cap for multiple major errors; 50-point cap for misrepresented meaning. Provide detailed error breakdown and corrections.
+    
+    Fatal Errors (51–100 Points per Issue):
+    Incomprehensible translation: Nonsense or unintelligible (e.g., "Das Haus fliegt im Himmel" for "Дом был построен"). Deduct 51–80 points.
+    Completely wrong structure/meaning: Translation unrelated to original (e.g., "Er liebt Katzen" for "Он ушёл домой"). Deduct 51–80 points.
+    
+    Empty translation: No translation provided. Deduct 100 points.
+    COMPLETELY UNRELATED TRANSLATION: Deduct 100 points.
+
+    Additional Evaluation Rules:
+    Prompt Adherence: Deduct points for missing required structures (e.g., passive voice, Konjunktiv II, double conjunctions) based on severity (minor: 10–15 points; severe: 20–30 points; critical: 35–50 points).
+    Contextual Consistency: Deduct 5–15 points for translations breaking the narrative flow of the original Russian story.
+    B2-Level Appropriateness: Deduct 5–10 points for overly complex/simple vocabulary or grammar not suited for B2 learners.
+
+    ---
+
+    **FORMAT YOUR RESPONSE STRICTLY as follows (without extra words):**  
+    Score: X/100
 """
 }
 
@@ -1136,7 +1218,7 @@ async def done(update: Update, context: CallbackContext):
 
 
     # Ожидаем, пока все отправленные переводы не запишутся в базу
-    max_attempts = 30  # Максимум 30 попыток (30 * 5 секунд = 150 секунд)
+    max_attempts = 40  # Максимум 30 попыток (30 * 5 секунд = 150 секунд)
     attempt = 0
     start_time = datetime.now()
 
@@ -1381,32 +1463,61 @@ async def generate_sentences(user_id, num_sentances, context: CallbackContext = 
         return ["Запасное предложение 1", "Запасное предложение 2"]
 
 
-async def recheck_score_only(client_recheck, original_text, user_translation):
-    prompt = f"""
-You previously evaluated a student's translation and gave it a score of 0 out of 100.
+async def recheck_score_only(original_text, user_translation):
 
-Please reassess the score **again** based on the information below.
+    task_name = "recheck_translation"
+    system_instruction = "recheck_translation"
+    assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
+            
+    # ✅ Создаём новый thread каждый раз
+    thread = client.beta.threads.create()
+    thread_id = thread.id
 
-Original sentence (Russian): "{original_text}"  
-User's translation (German): "{user_translation}"  
-
-Return your reassessed score in the following format only:  
-Score: X/100
-""" 
-    for i in range(3):
+    user_message = f"""
+    Original sentence (Russian): "{original_text}"  
+    User's translation (German): "{user_translation}"
+    """ 
+    
+    #Генерация с помощью GPT     
+    for attempt in range(3): # Пробуем до 3 раз при ошибке
         try:
-            responce = await client_recheck.chat.completions.create(
-                model="gpt-4-turbo",
-                messages=[{"role": "user", "content": prompt}]
+            client.beta.threads.messages.create(
+                thread_id=thread_id,
+                role="user",
+                content=user_message
             )
-            text = responce.choices[0].message.content.strip()
+
+            run = client.beta.threads.runs.create(
+                thread_id=thread_id,
+                assistant_id=assistant_id
+            )
+            while True:
+                run_status = client.beta.threads.runs.retrieve(thread_id=thread_id, run_id=run.id)
+                if run_status.status == "completed":
+                    break
+                await asyncio.sleep(1)  # подожди чуть-чуть
+            
+
+            # Получаем сообщения после завершения run
+            messages = client.beta.threads.messages.list(thread_id=thread_id)
+            last_message = messages.data[0]  # обычно последнее — ответ
+            text = last_message.content[0].text.value
+
+            try:
+                client.beta.threads.delete(thread_id=thread_id)
+                logging.info(f"🗑️ Thread удалён: {thread_id}")
+
+            except Exception as e:
+                logging.warning(f"Не удалось удалить thread: {e}")
+
+            
             print(f"🔁 Ответ на перепроверку оценки:\n{text}")
             if "score" in text.lower():
                 reassessed_score = text.lower().split("score:")[-1].split("/")[0].strip()
                 try:
-                    if int(reassessed_score) == 0:
-                        continue
-                    return reassessed_score
+                    reassessed_score = int(reassessed_score)
+                    print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
+                    return str(reassessed_score)
                 except ValueError:
                     print(f"⚠️ Не удалось привести reassessed_score к числу: {reassessed_score}")
                     continue
@@ -1429,10 +1540,11 @@ async def check_translation(original_text, user_translation, update: Update, con
     thread_id = thread.id
 
     # Initialize variables with default values at the beginning of the function
-    score = "50"  # Default score
+    score = None  # Default score
     categories = []
     subcategories = []
-    correct_translation = "there is no information."  # Default translation
+    #correct_translation = "there is no information."  # Default translation
+    correct_translation = None
     
     # ✅ Показываем сообщение о начале проверки
     message = await context.bot.send_message(chat_id=update.message.chat_id, text="⏳ Посмотрим на что ты способен...")
@@ -1497,7 +1609,7 @@ async def check_translation(original_text, user_translation, update: Update, con
             #severity = collected_text.split("Severity: ")[-1].split("\n")[0].strip() if "Severity:" in collected_text and len(collected_text.split("Severity: ")[-1].split("\n")) > 0 else None
             
             #correct_translation = collected_text.split("Correct Translation: ")[-1].strip() if "Correct Translation:" in collected_text else None
-            correct_translation = None
+
             match = re.search(r'Correct Translation:\s*(.+?)(?:\n|\Z)', collected_text)
             if match:
                 correct_translation = match.group(1).strip()
@@ -1531,14 +1643,14 @@ async def check_translation(original_text, user_translation, update: Update, con
                 except ValueError:
                     print(f"⚠️ Не удалось привести score_str к числу: {score_str}")
                     print(f"⚠️ GPT вернул некорректный формат оценки. Запрашиваем повторную оценку...")
-                    reassessed_score = await recheck_score_only(client_recheck, original_text, user_translation)
+                    reassessed_score = await recheck_score_only(original_text, user_translation)
                     print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
                     score = reassessed_score
                     break  # завершаем цикл успешно
 
                 if score_int == 0:
                     print(f"⚠️ GPT поставил 0. Запрашиваем повторную оценку...")
-                    reassessed_score = await recheck_score_only(client_recheck, original_text, user_translation)
+                    reassessed_score = await recheck_score_only(original_text, user_translation)
                     print(f"🔁 GPT повторно оценил на: {reassessed_score}/100")
                     score = reassessed_score
                     break
@@ -1583,7 +1695,7 @@ async def check_translation(original_text, user_translation, update: Update, con
 
     # ✅ Если балл > 75 → стилистическая ошибка
     if score and score.isdigit() and int(score) > 75:
-        result_text += "\n✅ Перевод на высоком уровне — считаем это незначительной ошибкой."
+        result_text += "\n✅ Перевод на высоком уровне."
 
     # ✅ Отправляем текст в Telegram с поддержкой HTML
     sent_message = await context.bot.send_message(
@@ -2675,7 +2787,7 @@ async def send_weekly_summary(context: CallbackContext):
         AND user_id = t.user_id) 
         - COUNT(DISTINCT t.sentence_id) AS пропущено_за_неделю,
         COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 2) -- ✅ Среднее время в штрафе
+            - (COALESCE(p.avg_time, 0) * 1) -- ✅ Среднее время в штрафе
             - ((SELECT COUNT(*) 
                 FROM daily_sentences_deepseek 
                 WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
@@ -2753,7 +2865,7 @@ async def user_stats(update: Update, context: CallbackContext):
                     WHERE p.user_id = t.user_id 
                         AND p.start_time::date = CURRENT_DATE
                         AND p.completed = TRUE
-                ), 0) * 2) 
+                ), 0) * 1) 
                 - (GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek
                                 WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
         FROM translations_deepseek t
@@ -2773,7 +2885,7 @@ async def user_stats(update: Update, context: CallbackContext):
             COALESCE(p.total_time, 0) AS общее_время_за_неделю,  
             GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) AS пропущено_за_неделю,
             COALESCE(AVG(t.score), 0) 
-                - (COALESCE(p.avg_session_time, 0) * 2)  
+                - (COALESCE(p.avg_session_time, 0) * 1)  
                 - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
         FROM translations_deepseek t
         LEFT JOIN (
@@ -2867,7 +2979,7 @@ async def send_daily_summary(context: CallbackContext):
             COALESCE(p.total_time, 0) AS total_time_minutes, 
             COALESCE(AVG(t.score), 0) AS avg_score,
             COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 2) 
+            - (COALESCE(p.avg_time, 0) * 1) 
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS final_score
         FROM daily_sentences_deepseek ds
         LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
@@ -2951,7 +3063,7 @@ async def send_progress_report(context: CallbackContext):
         COALESCE(p.total_time, 0) AS общее_время_за_день, -- ✅ Общее время за день
         COALESCE(AVG(t.score), 0) AS средняя_оценка,
         COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 2) -- ✅ Используем среднее время в расчётах
+            - (COALESCE(p.avg_time, 0) * 1) -- ✅ Используем среднее время в расчётах
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS итоговый_балл
     FROM daily_sentences_deepseek ds
     LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
@@ -3266,7 +3378,6 @@ def main():
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
     application.run_polling()
-
 
 
 
