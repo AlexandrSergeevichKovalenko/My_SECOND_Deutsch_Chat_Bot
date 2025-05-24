@@ -3358,7 +3358,7 @@ def main():
         hour=4,
         minute=1,
         #day_of_week = "mon,tue,thu,fri,sat"
-        day_of_week = "mon,fri"
+        day_of_week = "mon, fri"
     )
     
     scheduler.add_job(lambda: run_async_job(send_me_analytics_and_recommend_me, CallbackContext(application=application)), "cron", day_of_week="fri", hour=15, minute=15)
@@ -3373,7 +3373,7 @@ def main():
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
-    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=5, minute=15)
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=4, minute=15)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
