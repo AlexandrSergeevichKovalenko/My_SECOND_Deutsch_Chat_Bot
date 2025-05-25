@@ -2219,72 +2219,62 @@ async def check_user_translation(update: Update, context: CallbackContext, trans
 
             was_in_mistakes = cursor.fetchone()[0] > 0
 
-            if score >= 85 and was_in_mistakes:
-                try:
-                    # # ✅ Проверяем, существует ли предложение с таким sentence_id
-                    # cursor.execute("""
-                    #     SELECT COUNT(*) FROM detailed_mistakes_deepseek
-                    #     WHERE sentence_id = %s;
-                    # """, (id_for_mistake_table, ))
 
-                    # result = cursor.fetchone()
-                    # if result and result[0] > 0:
-                    logging.info(f"✅ Получаем все данные Предложения FROM detailed_mistakes_deepseek с sentence_id = {id_for_mistake_table}")
-                    cursor.execute("""
-                        SELECT user_id, score, attempt FROM detailed_mistakes_deepseek
-                        WHERE sentence_id = %s;
-                    """, (id_for_mistake_table,))
-                        
-                    rows = cursor.fetchall()
-                    user_id = rows[0][0]
-                    score_to_save = score
-                    total_attempts = max(row[2] for row in rows)
-                    # Добавляем 1 Чтобы учесть Текущую попытку (без добавления 1 Она не будет учтена)
-                    total_attempts = total_attempts + 1
-                    
-                    logging.info(f"✅ Переносим данные Предложения FROM detailed_mistakes_deepseek в Таблицу successful_translations где находятся предложения с баллом 80 И более с sentence_id = {id_for_mistake_table}")
-                    cursor.execute("""
-                    INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
-                    VALUES (%s,%s,%s,%s, NOW());
-                    """, (user_id, sentence_id, score_to_save, total_attempts))
+            # === КЛЮЧЕВАЯ ЛОГИКА ===
 
-                    logging.info(f"✅ Удаляем предложение с sentence_id = {id_for_mistake_table}, так как балл выше 85.")
-                    
-                    # ✅ Удаляем все ошибки, связанные с данным предложением
+            if was_in_mistakes:
+                if score >= 85:
+                    # Получаем текущую максимальную попытку
+                    cursor.execute("""
+                        SELECT MAX(attempt) FROM detailed_mistakes_deepseek
+                        WHERE sentence_id = %s AND user_id = %s;
+                    """, (id_for_mistake_table, user_id))
+                    result = cursor.fetchone()
+                    total_attempts = (result[0] or 0) + 1
+
+                    # Переносим в успешные
+                    cursor.execute("""
+                        INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
+                        VALUES (%s, %s, %s, %s, NOW());
+                    """, (user_id, sentence_id, score, total_attempts))
+
+                    # Удаляем из ошибок
                     cursor.execute("""
                         DELETE FROM detailed_mistakes_deepseek
-                        WHERE sentence_id = %s;
-                        """, (id_for_mistake_table, ))
+                        WHERE sentence_id = %s AND user_id = %s;
+                    """, (id_for_mistake_table, user_id))
                     conn.commit()
-                    logging.info(f"✅ Предложение с sentence_id = {id_for_mistake_table} успешно удалено.")
+                    logging.info(f"✅ Перевод №{sentence_number} перемещён в успешные и удалён из ошибок.")
+                else:
+                    logging.info(f"⚠️ Перевод №{sentence_number} пока не набрал 85, остаётся в ошибках.")
+                continue  # не идём дальше
 
-                except Exception as e:
-                    logging.error(f"❌ Ошибка при удалении предложения с sentence_id = {id_for_mistake_table}: {e}")
-
-            mistake_exists = was_in_mistakes
-
-            if score >= 80 and not mistake_exists:
-                cursor.execute("""
-                    INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
-                    VALUES(%s, %s, %s, %s, NOW());
-                    """, (user_id, sentence_id, score, int(1)))
-                print(f"✅ Перевод на высоком уровне ({score}/100)")
-                continue
-            
-            # ✅ Если оценка < 80 → только тогда сохраняем в базу
-            try:
-                await log_translation_mistake(user_id, original_text, user_translation, categories, subcategories, score, correct_translation)
-            
-            except Exception as e:
-                print(f"⚠️ Ошибка при записи ошибки в detailed_mistakes_deepseek: {e}")
+            # Новый перевод (не был в ошибках)
+            if not was_in_mistakes:
+                if score >= 80:
+                    cursor.execute("""
+                        INSERT INTO successful_translations (user_id, sentence_id, score, attempt, date)
+                        VALUES(%s, %s, %s, %s, NOW());
+                    """, (user_id, sentence_id, score, 1))
+                    conn.commit()
+                    logging.info(f"✅ Новый успешный перевод №{sentence_number}, {score}/100")
+                    continue
+                else:
+                    # Добавляем в ошибки
+                    try:
+                        await log_translation_mistake(
+                            user_id, original_text, user_translation,
+                            categories, subcategories, score, correct_translation
+                        )
+                        logging.info(f"🟥 Добавлен в ошибки: №{sentence_number}, score={score}")
+                    except Exception as e:
+                        logging.error(f"❌ Ошибка при записи ошибки: {e}")
 
         except Exception as e:
             logging.error(f"❌ Ошибка обработки предложения {number_str}: {e}")
             
     cursor.close()
     conn.close()
-
-
 
 async def get_original_sentences(user_id, context: CallbackContext):
     conn = get_db_connection()
