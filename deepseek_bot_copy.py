@@ -2782,7 +2782,7 @@ async def send_weekly_summary(context: CallbackContext):
                 FROM daily_sentences_deepseek 
                 WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
                 AND user_id = t.user_id) 
-            - COUNT(DISTINCT t.sentence_id)) * 20
+            - COUNT(DISTINCT t.sentence_id)) * 0  -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
             AS итоговый_балл
     FROM translations_deepseek t
     LEFT JOIN (
@@ -2857,7 +2857,7 @@ async def user_stats(update: Update, context: CallbackContext):
                         AND p.completed = TRUE
                 ), 0) * 0)    --✅ i replaced 1 with 0
                 - (GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek
-                                WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
+                                WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 0) AS итоговый_балл -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
         FROM translations_deepseek t
         WHERE t.user_id = %s AND t.timestamp::date = CURRENT_DATE
         GROUP BY t.user_id;
@@ -2876,7 +2876,7 @@ async def user_stats(update: Update, context: CallbackContext):
             GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) AS пропущено_за_неделю,
             COALESCE(AVG(t.score), 0) 
                 - (COALESCE(p.avg_session_time, 0) * 0)  --✅ i replaced 1 with 0
-                - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
+                - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 0) AS итоговый_балл. -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
         FROM translations_deepseek t
         LEFT JOIN (
             -- ✅ Отдельный подзапрос для корректного расчёта времени по каждому пользователю
@@ -2970,7 +2970,7 @@ async def send_daily_summary(context: CallbackContext):
             COALESCE(AVG(t.score), 0) AS avg_score,
             COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 0) --✅ i replaced 1 with 0
-            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS final_score
+            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 0) AS final_score. -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
         FROM daily_sentences_deepseek ds
         LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
         LEFT JOIN (
@@ -3054,7 +3054,7 @@ async def send_progress_report(context: CallbackContext):
         COALESCE(AVG(t.score), 0) AS средняя_оценка,
         COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 0) -- ✅ Используем среднее время в расчётах --✅ i replaced 1 with 0
-            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS итоговый_балл
+            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 0) AS итоговый_балл -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
     FROM daily_sentences_deepseek ds
     LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
     LEFT JOIN (
