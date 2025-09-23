@@ -2876,7 +2876,7 @@ async def user_stats(update: Update, context: CallbackContext):
             GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) AS пропущено_за_неделю,
             COALESCE(AVG(t.score), 0) 
                 - (COALESCE(p.avg_session_time, 0) * 0)  --✅ i replaced 1 with 0
-                - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 0) AS итоговый_балл. -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
+                - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 0) AS итоговый_балл -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
         FROM translations_deepseek t
         LEFT JOIN (
             -- ✅ Отдельный подзапрос для корректного расчёта времени по каждому пользователю
