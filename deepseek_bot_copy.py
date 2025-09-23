@@ -2970,7 +2970,7 @@ async def send_daily_summary(context: CallbackContext):
             COALESCE(AVG(t.score), 0) AS avg_score,
             COALESCE(AVG(t.score), 0) 
             - (COALESCE(p.avg_time, 0) * 0) --✅ i replaced 1 with 0
-            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 0) AS final_score. -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
+            - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 0) AS final_score -- ✅ i replaced penalty 20 with penalty 0 to let everyone translate without penalties
         FROM daily_sentences_deepseek ds
         LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
         LEFT JOIN (
