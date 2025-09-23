@@ -2777,7 +2777,7 @@ async def send_weekly_summary(context: CallbackContext):
         AND user_id = t.user_id) 
         - COUNT(DISTINCT t.sentence_id) AS пропущено_за_неделю,
         COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 1) -- ✅ Среднее время в штрафе
+            - (COALESCE(p.avg_time, 0) * 0) -- ✅ Среднее время в штрафе --✅ i replaced 1 with 0
             - ((SELECT COUNT(*) 
                 FROM daily_sentences_deepseek 
                 WHERE date >= CURRENT_DATE - INTERVAL '6 days' 
@@ -2855,7 +2855,7 @@ async def user_stats(update: Update, context: CallbackContext):
                     WHERE p.user_id = t.user_id 
                         AND p.start_time::date = CURRENT_DATE
                         AND p.completed = TRUE
-                ), 0) * 1) 
+                ), 0) * 0)    --✅ i replaced 1 with 0
                 - (GREATEST(0, (SELECT COUNT(*) FROM daily_sentences_deepseek
                                 WHERE date = CURRENT_DATE AND user_id = t.user_id) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
         FROM translations_deepseek t
@@ -2875,7 +2875,7 @@ async def user_stats(update: Update, context: CallbackContext):
             COALESCE(p.total_time, 0) AS общее_время_за_неделю,  
             GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) AS пропущено_за_неделю,
             COALESCE(AVG(t.score), 0) 
-                - (COALESCE(p.avg_session_time, 0) * 1)  
+                - (COALESCE(p.avg_session_time, 0) * 0)  --✅ i replaced 1 with 0
                 - (GREATEST(0, COALESCE(ds.total_sentences, 0) - COUNT(DISTINCT t.sentence_id)) * 20) AS итоговый_балл
         FROM translations_deepseek t
         LEFT JOIN (
@@ -2969,7 +2969,7 @@ async def send_daily_summary(context: CallbackContext):
             COALESCE(p.total_time, 0) AS total_time_minutes, 
             COALESCE(AVG(t.score), 0) AS avg_score,
             COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 1) 
+            - (COALESCE(p.avg_time, 0) * 0) --✅ i replaced 1 with 0
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS final_score
         FROM daily_sentences_deepseek ds
         LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
@@ -3053,7 +3053,7 @@ async def send_progress_report(context: CallbackContext):
         COALESCE(p.total_time, 0) AS общее_время_за_день, -- ✅ Общее время за день
         COALESCE(AVG(t.score), 0) AS средняя_оценка,
         COALESCE(AVG(t.score), 0) 
-            - (COALESCE(p.avg_time, 0) * 1) -- ✅ Используем среднее время в расчётах
+            - (COALESCE(p.avg_time, 0) * 0) -- ✅ Используем среднее время в расчётах --✅ i replaced 1 with 0
             - ((COUNT(DISTINCT ds.id) - COUNT(DISTINCT t.id)) * 20) AS итоговый_балл
     FROM daily_sentences_deepseek ds
     LEFT JOIN translations_deepseek t ON ds.user_id = t.user_id AND ds.id = t.sentence_id
