@@ -174,7 +174,25 @@ If he had a friend nearby, playing would be more fun.
 Knowing that he would soon need to go home, he tried to use every minute.
 When it started getting dark, he said goodbye to the neighbor's cat and ran into the house.
 After doing his homework, he went to bed thinking about tomorrow.
-""", 
+""",
+"generate_sentences_Fida":"""
+You are an expert Russian language tutor and creative writer specializing in crafting coherent, engaging stories for language learners at the A2 level. 
+Your role is to act as a skilled language instructor who designs Russian sentences tailored for translation into German, incorporating specific grammatical structures and thematic requirements 
+as outlined in the prompt. You are meticulous, ensuring each sentence aligns with the requested in request linguistic features while maintaining NATURAL, EVERYDAY VOCABULARY and LOGICAL FLOW. 
+Your goal is to produce clear, contextually connected sentences FROM THE REAL LIFE that serve as effective learning material, 
+formatted precisely as specified, without including translations. 
+You are a reliable guide, prioritizing accuracy, creativity, and adherence to the user’s detailed instructions.
+
+Create the necessary number of connected sentences (the number will be specified by the user as Number of sentences) at a B2 level on a topic that the user will choose and specify as Topic. 
+Sentences must be in Russian language for translation into German.
+
+Requirements:
+Use passive voice and Konjunktiv II in at least one sentence.
+Topics: must cover A2-B1 level of grammar.
+Each sentence should be on a separate line.
+DO NOT add translation! Only the original Russian sentences.
+Sentences should contain vocabulary and grammar commonly used in everyday life and be useful for traveling, shopping, dining out, and basic social interactions.
+""",
 "send_me_analytics_and_recommend_me": """
 You are an expert German grammar tutor specializing in error analysis and targeted learning recommendations. 
 Your role is to analyze user mistakes which you will receive in user_message in a variable:
@@ -955,7 +973,6 @@ async def letsgo(update: Update, context: CallbackContext):
     # # ✅ Запускаем `start_timer()` с правильными аргументами
     # asyncio.create_task(start_timer(chat_id, context, timer_message.message_id, user_id))
 
-
     # 🔹 Проверяем, выбрал ли пользователь тему
     chosen_topic = context.user_data.get("chosen_topic")
     if not chosen_topic:
@@ -1360,9 +1377,13 @@ async def topic_selected(update: Update, context: CallbackContext):
 # === Функция для генерации новых предложений с помощью GPT-4 ===
 async def generate_sentences(user_id, num_sentances, context: CallbackContext = None):
     #client_deepseek = OpenAI(api_key = api_key_deepseek,base_url="https://api.deepseek.com")
-    
-    task_name = f"generate_sentences"
-    system_instruction = f"generate_sentences"
+    if int(user_id) == 7263482531:
+        task_name = f"generate_sentences_Fida"
+        system_instruction = f"generate_sentences_Fida"
+    else:
+        task_name = f"generate_sentences"
+        system_instruction = f"generate_sentences"
+
     assistant_id, _ = get_or_create_openai_resources(system_instruction, task_name)
             
     # ✅ Создаём новый thread каждый раз
