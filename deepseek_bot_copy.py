@@ -3213,20 +3213,23 @@ async def mistakes_to_voice(username, sentence_pairs):
 
     audio_segments = []
 
-    def synthesize(text, language_code, voice_name):
+    def synthesize(text, language_code, voice_name, speaking_rate):
         input_data = texttospeech.SynthesisInput(text = text)
 
         voice = texttospeech.VoiceSelectionParams(
-            language_code = language_code, name=voice_name
+            language_code = language_code, 
+            name=voice_name
         )
 
         config = texttospeech.AudioConfig(
             audio_encoding=texttospeech.AudioEncoding.MP3,
-            speaking_rate=0.9 # 90% скорости
+            speaking_rate=speaking_rate # чтобы можно было изменять данный параметр
         )
 
         response = client.synthesize_speech(
-            input=input_data, voice=voice, audio_config=config 
+            input=input_data, 
+            voice=voice, 
+            audio_config=config 
         )
 
         return AudioSegment.from_file_using_temporary_files(io.BytesIO(response.audio_content))
@@ -3236,11 +3239,13 @@ async def mistakes_to_voice(username, sentence_pairs):
         # Русский (один раз)
         ru_audio = synthesize(russian, "ru-RU", "ru-RU-Wavenet-C")
         # Немецкий (дважды)
-        de_audio_1 = synthesize(german, "de-DE", "de-DE-Wavenet-B")
-        de_audio_2 = synthesize(german, "de-DE", "de-DE-Wavenet-B")
+        de_audio_1 = synthesize(german, "de-DE", "de-DE-Neural2-D", 0.7)
+        de_audio_2 = synthesize(german, "de-DE", "de-DE-Neural2-F", 0.8)
+        de_audio_3 = synthesize(german, "de-DE", "de-DE-Wavenet-B", 0.9)
+
 
         # Объединяем
-        combined = ru_audio + de_audio_1 + de_audio_2
+        combined = ru_audio + de_audio_1 + de_audio_2 + de_audio_3
         audio_segments.append(combined)
 
     final_audio = sum(audio_segments)
