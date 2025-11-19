@@ -34,6 +34,8 @@ from dotenv import load_dotenv
 from pydub import AudioSegment
 import io
 
+from pydub.generators import Sine
+
 
 application = None
 global_assistants_cache = {}
@@ -3237,15 +3239,39 @@ async def mistakes_to_voice(username, sentence_pairs):
     for russian, german in sentence_pairs:
         print(f"🎤 Синтезируем: {russian} -> {german}")
         # Русский (один раз)
-        ru_audio = synthesize(russian, "ru-RU", "ru-RU-Wavenet-C")
+        ru_audio = synthesize(russian, "ru-RU", "ru-RU-Wavenet-C", 0.9)
         # Немецкий (дважды)
         de_audio_1 = synthesize(german, "de-DE", "de-DE-Neural2-D", 0.7)
         de_audio_2 = synthesize(german, "de-DE", "de-DE-Neural2-F", 0.8)
         de_audio_3 = synthesize(german, "de-DE", "de-DE-Wavenet-B", 0.9)
 
+        # 3) Инструкция пользователю
+        instruction = "Bitte wiederholen Sie den Satz nach dem Ton."
+        instruction_audio = synthesize(instruction, "de-DE", "de-DE-Neural2-F", 1.0)
 
-        # Объединяем
-        combined = ru_audio + de_audio_1 + de_audio_2 + de_audio_3
+        # 4) Повтор русской фразы, чтобы её можно было перевести
+        ru_audio_repeat = synthesize(russian, "ru-RU", "ru-RU-Wavenet-C", 0.88)
+        
+        # Этот сигнал — стандартный «beep».
+        beep = Sine(1000).to_audio_segment(duration=500)
+
+        # 5) Пауза адаптивное
+        length = len(russian.split())
+        if length <= 5:
+            pause_ms = 7000
+        elif length <= 10:
+            pause_ms = 8500
+        else:
+            pause_ms = 11000
+        
+        pause = AudioSegment.silent(duration=pause_ms) # 10 секунд тишины
+
+        de_after_pause = synthesize(german, "de-DE", "de-DE-Neural2-D", 0.9)
+
+
+        # Объединяем все части
+        combined = ru_audio + de_audio_1 + de_audio_2 + de_audio_3 + instruction_audio + ru_audio_repeat + beep + pause + de_after_pause
+        
         audio_segments.append(combined)
 
     final_audio = sum(audio_segments)
@@ -3422,7 +3448,7 @@ def main():
     for hour in [7,12,16]:
         scheduler.add_job(lambda: run_async_job(send_progress_report), "cron", hour=hour, minute=5)
 
-    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=4, minute=15)
+    scheduler.add_job(lambda: run_async_job(get_yesterdays_mistakes_for_audio_message, CallbackContext(application=application)), "cron", hour=13, minute=13)
 
     scheduler.start()
     print("🚀 Бот запущен! Ожидаем сообщения...")
