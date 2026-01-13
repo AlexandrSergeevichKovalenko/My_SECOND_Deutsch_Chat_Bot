@@ -5,7 +5,7 @@ from openai import OpenAI
 import psycopg2
 import datetime
 from datetime import datetime, time
-from telegram import Update
+from telegram import ReplyKeyboardRemove, Update
 from telegram.ext import Application, CommandHandler, MessageHandler, filters, CallbackContext, TypeHandler, Defaults
 from apscheduler.schedulers.background import BackgroundScheduler
 from apscheduler.schedulers.asyncio import AsyncIOScheduler
@@ -836,8 +836,8 @@ async def send_main_menu(update: Update, context: CallbackContext):
 
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
-    # 1️⃣ Удаляем старую клавиатуру
-    #await update.message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardMarkup([[]], resize_keyboard=True))
+    # 1) Remove old keyboard explicitly
+    await update.message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardRemove())
 
     # 2️⃣ Отправляем новое меню
     await update.message.reply_text("Используйте кнопки:", reply_markup=reply_markup)
