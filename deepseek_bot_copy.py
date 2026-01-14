@@ -837,10 +837,10 @@ async def send_main_menu(update: Update, context: CallbackContext):
     reply_markup = ReplyKeyboardMarkup(keyboard, resize_keyboard=True)
 
     # 1) Remove old keyboard explicitly
-    await update.message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardRemove())
+    await update.effective_message.reply_text("⏳ Обновляем меню...", reply_markup=ReplyKeyboardRemove())
 
     # 2️⃣ Отправляем новое меню
-    await update.message.reply_text("Используйте кнопки:", reply_markup=reply_markup)
+    await update.effective_message.reply_text("Используйте кнопки:", reply_markup=reply_markup)
 
 async def debug_message_handler(update: Update, context: CallbackContext):
     print(f"🔹 Получено сообщение (DEBUG): {update.message.text}")
