@@ -545,9 +545,11 @@ if TELEGRAM_DeepSeek_BOT_TOKEN:
 else:
     logging.error("❌ TELEGRAM_DeepSeek_BOT_TOKEN не загружен! Проверьте переменные окружения.")
 
-# ID группы
+# ID группы: (Не активна) Подкаблучников тут нет🦁_🥞_🏋️‍♂️
 #TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -1002258968332
-TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -5296959535
+
+# Der Name der Grupe: Fids Familie lernt Deutsch
+TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -1003502649211
 
 if TEST_DEEPSEEK_BOT_GROUP_CHAT_ID:
     logging.info("✅ GROUP_CHAT_ID успешно загружен!")
