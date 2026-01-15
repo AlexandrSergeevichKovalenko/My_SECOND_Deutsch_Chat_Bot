@@ -546,7 +546,8 @@ else:
     logging.error("❌ TELEGRAM_DeepSeek_BOT_TOKEN не загружен! Проверьте переменные окружения.")
 
 # ID группы
-TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -1002258968332
+#TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -1002258968332
+TEST_DEEPSEEK_BOT_GROUP_CHAT_ID = -5296959535
 
 if TEST_DEEPSEEK_BOT_GROUP_CHAT_ID:
     logging.info("✅ GROUP_CHAT_ID успешно загружен!")
